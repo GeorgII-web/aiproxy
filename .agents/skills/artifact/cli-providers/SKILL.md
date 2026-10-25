@@ -36,6 +36,20 @@ Junie (`Parser::junie`): `step` → `tracing::info!(target: "junie")`; `result` 
 Non-JSON lines go to debug. Non-zero exit with nothing produced → `ProviderError` with the stderr tail
 (last 500 chars, buffered by `process::spawn`).
 
+## Model discovery
+
+`CliProvider::discover()` (`discover_models = true`, default) runs at registry build in the background
+(`Registry::start_discovery`, needs a Tokio context, hence the runtime handle in `AppState`) and on
+`POST /api/providers/{id}/discover`:
+
+| Flavor | How | Result |
+|---|---|---|
+| Junie | `junie --skip-update-check --model=__list__ --task=list models`; the list is on **stderr** as `- <id>` lines | every id Junie accepts for `--model` |
+| Claude | aliases quoted in the `--model` block of `claude --help` (`fable`, `opus`, `sonnet`) plus the built-in `CLAUDE_MODELS` ids | no list command exists; update the constant when models change |
+
+`Provider::model_ids()` = configured agents, then discovered models not already named by an agent; they resolve
+through the pass-through rule. `/api/status` returns them separately as `discovered`.
+
 ## Timeouts and kill
 
 - `timeout_secs` is a deadline on the next stdout line (`tokio::select!` with `sleep_until`); on expiry the

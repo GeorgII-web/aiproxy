@@ -13,16 +13,19 @@
 // in the visible browser is reused by the headless one.
 
 import { chromium } from 'playwright';
+import fs from 'node:fs';
 import { createInterface } from 'node:readline';
 import path from 'node:path';
 
 const PROFILE = process.env.AIPROXY_PROFILE_DIR || path.join(process.cwd(), 'profile');
-const URL = process.env.AIPROXY_URL || 'https://chat.deepseek.com';
+const CHAT_URL = process.env.AIPROXY_URL || 'https://chat.deepseek.com';
 // 'chromium' = Playwright's full Chromium in new headless mode (a normal user agent; the
 // default headless shell announces itself as HeadlessChrome). 'chrome' / 'msedge' use the
 // installed browser.
 const CHANNEL = process.env.AIPROXY_CHANNEL || 'chromium';
 const LOGIN_TIMEOUT_MS = 15 * 60 * 1000;
+// Optional JSON with an existing session: {"token": "<userToken>", "cookie": "<Cookie header>"}.
+const AUTH_FILE = process.env.AIPROXY_AUTH_FILE || '';
 
 // DeepSeek's DOM is not stable; override any of these with AIPROXY_SELECTORS='{"input":"…"}'.
 const SEL = Object.assign(
@@ -44,6 +47,45 @@ let ctx = null;
 let page = null;
 let headless = true;
 let cancelled = false;
+let authTried = false;
+
+/** Injects the session from AUTH_FILE into the current context; true when something was imported. */
+async function importAuth() {
+  if (!AUTH_FILE || !fs.existsSync(AUTH_FILE)) return false;
+  let auth;
+  try {
+    auth = JSON.parse(fs.readFileSync(AUTH_FILE, 'utf8'));
+  } catch (e) {
+    log('warn', `auth file ${AUTH_FILE}: ${e.message}`);
+    return false;
+  }
+  const host = new URL(CHAT_URL).hostname;
+  const domain = '.' + host.split('.').slice(-2).join('.');
+  let imported = 0;
+  if (typeof auth.cookie === 'string' && auth.cookie.trim()) {
+    const cookies = auth.cookie
+      .split(';')
+      .map((s) => s.trim())
+      .filter((s) => s.includes('='))
+      .map((kv) => {
+        const i = kv.indexOf('=');
+        return { name: kv.slice(0, i), value: kv.slice(i + 1), domain, path: '/' };
+      });
+    await ctx.addCookies(cookies);
+    imported += cookies.length;
+  }
+  if (typeof auth.token === 'string' && auth.token) {
+    await page.goto(CHAT_URL, { waitUntil: 'domcontentloaded' });
+    await page.evaluate((t) => {
+      localStorage.setItem('userToken', JSON.stringify({ value: t, __version: '0' }));
+    }, auth.token);
+    imported += 1;
+  }
+  if (imported === 0) return false;
+  log('info', `session imported from ${AUTH_FILE}`);
+  await goHome();
+  return true;
+}
 
 async function close() {
   if (ctx) await ctx.close().catch(() => {});
@@ -80,7 +122,7 @@ async function launch(hl) {
 }
 
 async function goHome() {
-  await page.goto(URL, { waitUntil: 'domcontentloaded' });
+  await page.goto(CHAT_URL, { waitUntil: 'domcontentloaded' });
   await sleep(1500);
 }
 
@@ -103,6 +145,12 @@ async function ensureSession(forceLogin = false) {
   if (!browserAlive()) await launch(!forceLogin);
   await goHome();
   if (!forceLogin && (await loggedIn())) return;
+
+  if (!forceLogin && !authTried) {
+    authTried = true;
+    if ((await importAuth()) && (await loggedIn())) return;
+    if (AUTH_FILE) log('warn', 'imported session not accepted (expired?), falling back to the login window');
+  }
 
   if (headless) {
     const title = await page.title().catch(() => '');

@@ -37,7 +37,7 @@ manual; this file is for agents working on the code.
 - Every child process goes through `providers::process::Launch` → `command` (kill on drop, process tree
   kill, no console window on Windows, PATH lookup of `.cmd`/`.bat`). `Launch` is runtime-agnostic:
   `runtime = wsl` turns it into `wsl.exe --exec [/usr/bin/env K=V..] <resolved program> args`.
-- Windows exe from WSL: `cargo zigbuild --release --target x86_64-pc-windows-gnu` (venv `~/.venvs/zigbuild`).
+- Windows exe from WSL: `scripts/cargo-gnu.sh build --release`; release = push a `v*` tag.
 - Settings changes go through `AppState::apply_settings` (validate → save → apply); never write the file
   elsewhere.
 - Tray is `cfg(windows)` only; everything else must keep compiling on Linux (`cargo check`) and for Windows
@@ -47,7 +47,8 @@ manual; this file is for agents working on the code.
 ## Checks
 
 ```bash
-cargo check && cargo check --target x86_64-pc-windows-gnu
+cargo test && cargo fmt --check && cargo clippy --all-targets -- -D warnings
+scripts/cargo-gnu.sh clippy --all-targets -- -D warnings && scripts/cargo-gnu.sh build --release
 node --check sidecar/deepseek.mjs
 cargo run    # Linux: foreground server, Ctrl-C stops; AIPROXY_HOME=/tmp/x for a throwaway config
 ```

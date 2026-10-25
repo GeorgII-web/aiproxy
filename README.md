@@ -11,13 +11,23 @@ request is served by one of these providers:
 | DeepSeek website | `deepseek-web` | a Playwright browser on chat.deepseek.com; first run opens a visible browser for login, then headless | `deepseek/deepseek` |
 
 Providers and their agents are configuration, not code: an agent is a name plus a model, a
-system prompt and extra CLI arguments, exposed as model `<provider id>/<agent name>`. Each
+system prompt and extra CLI arguments, exposed as model `<provider id>/<agent name>`. On top of
+the agents, each CLI provider lists the CLI's own models (`discover_models`, on by default):
+Junie reports its full list (Claude, GPT, Gemini, Grok ...), Claude Code its aliases plus the
+known model ids. Every listed id works as `<provider id>/<model>`. Each
 provider runs either on Windows (`runtime = "native"`) or inside WSL (`runtime = "wsl"`),
 so the CLIs can live on whichever side they are installed.
 
 Requests are stateless: the message list is flattened into one prompt (a lone user message is
 passed as is; longer conversations get `[role]` headers), system messages go to the CLI's
 system prompt option.
+
+## Download
+
+Get `aiproxy.exe` from the [latest release](https://github.com/GeorgII-web/aiproxy/releases/latest) and run it
+from any folder. The exe is not signed, so Windows SmartScreen may ask once: "More info" → "Run anyway". For the
+DeepSeek provider also unpack `aiproxy-sidecar.zip` into a `sidecar` folder next to the exe (or anywhere, see
+`sidecar_dir`) and run `npm install` in it.
 
 ## Build (Windows)
 
@@ -38,13 +48,21 @@ npm install          # also downloads Playwright's Chromium
 ```
 
 From WSL/Linux the server part runs in the foreground (`cargo run`, Ctrl-C stops); the tray is
-Windows only. `cargo check --target x86_64-pc-windows-gnu` verifies the Windows build, and the
-Windows exe can be cross-built from WSL without a Windows toolchain:
+Windows only. The static Windows exe is cross-built from WSL without a Windows toolchain
+(MinGW is unpacked into `~/.local/opt/mingw-w64` on first use, no sudo):
 
 ```bash
-python3 -m venv ~/.venvs/zigbuild && ~/.venvs/zigbuild/bin/pip install cargo-zigbuild ziglang
-PATH=~/.venvs/zigbuild/bin:$PATH cargo zigbuild --release --target x86_64-pc-windows-gnu
-# target/x86_64-pc-windows-gnu/release/aiproxy.exe
+rustup target add x86_64-pc-windows-gnu
+scripts/cargo-gnu.sh build --release   # target/x86_64-pc-windows-gnu/release/aiproxy.exe
+```
+
+## Release
+
+Pushing a tag `v*` runs `.github/workflows/release.yml`: tests, fmt, clippy for both targets, the static
+exe, and a GitHub release with `aiproxy.exe` and `aiproxy-sidecar.zip` attached.
+
+```bash
+git tag v0.1.0 && git push origin v0.1.0
 ```
 
 ## Run
@@ -114,6 +132,9 @@ timeout, DeepSeek not logged in). A client that disconnects mid-stream kills the
   window; log in there and the request continues headless. Cookies stay in the profile folder.
   The settings page has **Log in / re-login** per DeepSeek provider to open that window on
   demand (expired session, other account).
+- An existing session can be imported instead: `auth_file` = path to a JSON with `token`
+  (DeepSeek's `userToken`) and/or `cookie` (a `Cookie` header string), the format of
+  FreeDeepseekAPI's `deepseek-auth.json`. It is tried once before the login window opens.
 - The sidecar drives the website's DOM, which DeepSeek changes without notice. Selectors are
   at the top of `sidecar/deepseek.mjs` and can be overridden with the environment variable
   `AIPROXY_SELECTORS` (JSON) if the site changes.

@@ -32,7 +32,8 @@ pub fn run(state: Arc<AppState>, rt: Runtime) -> ! {
     let open_settings = MenuItem::new("Open settings", true, None);
     let open_logs = MenuItem::new("Open logs folder", true, None);
     let restart = MenuItem::new("Restart server", true, None);
-    let autostart_item = CheckMenuItem::new("Start with Windows", true, autostart::is_enabled(), None);
+    let autostart_item =
+        CheckMenuItem::new("Start with Windows", true, autostart::is_enabled(), None);
     let quit = MenuItem::new("Quit", true, None);
     let menu = Menu::new();
     menu.append_items(&[
@@ -98,7 +99,11 @@ pub fn run(state: Arc<AppState>, rt: Runtime) -> ! {
 }
 
 fn status_text(state: &AppState) -> String {
-    format!("{APP_NAME} {} · {}/v1", env!("CARGO_PKG_VERSION"), state.base_url())
+    format!(
+        "{APP_NAME} {} · {}/v1",
+        env!("CARGO_PKG_VERSION"),
+        state.base_url()
+    )
 }
 
 fn open(target: String) {

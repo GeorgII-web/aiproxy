@@ -30,7 +30,11 @@ impl Launch {
             args: Vec::new(),
             cwd: (!cfg.workdir.is_empty()).then(|| cfg.workdir.clone()),
             env: Vec::new(),
-            runtime: if cfg!(windows) { cfg.runtime } else { Runtime::Native },
+            runtime: if cfg!(windows) {
+                cfg.runtime
+            } else {
+                Runtime::Native
+            },
             distro: cfg.wsl_distro.clone(),
         }
     }
@@ -68,7 +72,8 @@ impl Launch {
     pub async fn command(&self) -> Command {
         if !self.is_wsl() {
             let mut cmd = command(&self.program);
-            cmd.args(&self.args).envs(self.env.iter().map(|(k, v)| (k, v)));
+            cmd.args(&self.args)
+                .envs(self.env.iter().map(|(k, v)| (k, v)));
             if let Some(d) = &self.cwd {
                 cmd.current_dir(d);
             }
@@ -77,7 +82,9 @@ impl Launch {
         let program = if self.program.contains('/') {
             self.program.clone()
         } else {
-            resolve_wsl(&self.distro, &self.program).await.unwrap_or_else(|| self.program.clone())
+            resolve_wsl(&self.distro, &self.program)
+                .await
+                .unwrap_or_else(|| self.program.clone())
         };
         let mut cmd = command("wsl.exe");
         if !self.distro.is_empty() {
@@ -110,7 +117,8 @@ pub fn to_wsl_path(p: &Path) -> String {
 /// `command -v <name>` inside WSL, cached per (distro, name). Uses an interactive login shell
 /// because nvm and `~/.local/bin` are typically only on the PATH there.
 async fn resolve_wsl(distro: &str, name: &str) -> Option<String> {
-    static CACHE: std::sync::OnceLock<Mutex<std::collections::HashMap<String, String>>> = std::sync::OnceLock::new();
+    static CACHE: std::sync::OnceLock<Mutex<std::collections::HashMap<String, String>>> =
+        std::sync::OnceLock::new();
     let cache = CACHE.get_or_init(Default::default);
     let key = format!("{distro}\0{name}");
     if let Some(hit) = cache.lock().unwrap().get(&key) {
@@ -121,9 +129,16 @@ async fn resolve_wsl(distro: &str, name: &str) -> Option<String> {
         cmd.args(["-d", distro]);
     }
     cmd.args(["--exec", "/bin/bash", "-ilc", &format!("command -v {name}")]);
-    let out = tokio::time::timeout(std::time::Duration::from_secs(20), cmd.output()).await.ok()?.ok()?;
+    let out = tokio::time::timeout(std::time::Duration::from_secs(20), cmd.output())
+        .await
+        .ok()?
+        .ok()?;
     let text = String::from_utf8_lossy(&out.stdout);
-    let found = text.lines().map(str::trim).rfind(|l| l.starts_with('/'))?.to_string();
+    let found = text
+        .lines()
+        .map(str::trim)
+        .rfind(|l| l.starts_with('/'))?
+        .to_string();
     tracing::info!("wsl: {name} = {found}");
     cache.lock().unwrap().insert(key, found.clone());
     Some(found)
@@ -132,7 +147,10 @@ async fn resolve_wsl(distro: &str, name: &str) -> Option<String> {
 /// A command that is killed when dropped and opens no console window.
 pub fn command(program: &str) -> Command {
     let mut cmd = Command::new(resolve(program));
-    cmd.kill_on_drop(true).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
+    cmd.kill_on_drop(true)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
     #[cfg(windows)]
     cmd.creation_flags(CREATE_NO_WINDOW);
     #[cfg(unix)]
@@ -186,7 +204,9 @@ pub fn kill_tree(child: &mut Child) {
     }
     #[cfg(unix)]
     if let Some(pid) = child.id() {
-        let _ = std::process::Command::new("kill").args(["-9", &format!("-{pid}")]).status();
+        let _ = std::process::Command::new("kill")
+            .args(["-9", &format!("-{pid}")])
+            .status();
     }
     let _ = child.start_kill();
 }
@@ -226,12 +246,19 @@ pub async fn spawn(mut cmd: Command, stdin: Option<String>) -> Result<Running, P
             b.push_str(&line);
             b.push('\n');
             if b.len() > 8000 {
-                let cut = (b.len() - 4000..b.len()).find(|&i| b.is_char_boundary(i)).unwrap_or(0);
+                let cut = (b.len() - 4000..b.len())
+                    .find(|&i| b.is_char_boundary(i))
+                    .unwrap_or(0);
                 b.drain(..cut);
             }
         }
     });
-    Ok(Running { program, child: ChildGuard(child), lines: BufReader::new(stdout).lines(), stderr: buf })
+    Ok(Running {
+        program,
+        child: ChildGuard(child),
+        lines: BufReader::new(stdout).lines(),
+        stderr: buf,
+    })
 }
 
 impl Running {

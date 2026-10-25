@@ -1,0 +1,31 @@
+# Builds the static Windows exe the same way as WSL (scripts/cargo-gnu.sh) and attaches it, plus the
+# DeepSeek sidecar, to a GitHub release. Trigger: a pushed tag v*, e.g. `git tag v0.1.0 && git push origin v0.1.0`.
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - run: rustup toolchain install stable --profile minimal --component clippy,rustfmt --target x86_64-pc-windows-gnu
+      - run: sudo apt-get update
+      - run: cargo test
+      - run: cargo fmt --check
+      - run: cargo clippy --all-targets -- -D warnings
+      - run: scripts/cargo-gnu.sh clippy --all-targets -- -D warnings
+      - run: scripts/cargo-gnu.sh build --release
+      - run: node --check sidecar/deepseek.mjs
+      - run: zip -j aiproxy-sidecar.zip sidecar/deepseek.mjs sidecar/package.json
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            target/x86_64-pc-windows-gnu/release/aiproxy.exe
+            aiproxy-sidecar.zip
+          generate_release_notes: true

@@ -86,11 +86,17 @@ pub fn build_input(messages: &[Message]) -> ChatInput {
             s
         }
     };
-    ChatInput { prompt, system: (!system.is_empty()).then(|| system.join("\n\n")) }
+    ChatInput {
+        prompt,
+        system: (!system.is_empty()).then(|| system.join("\n\n")),
+    }
 }
 
 pub fn now() -> u64 {
-    SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0)
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
 }
 
 pub fn new_id() -> String {
@@ -119,7 +125,12 @@ pub struct Model {
 impl Model {
     pub fn new(id: &str) -> Self {
         let owner = id.split('/').next().unwrap_or("aiproxy").to_string();
-        Self { id: id.to_string(), object: "model", created: 0, owned_by: owner }
+        Self {
+            id: id.to_string(),
+            object: "model",
+            created: 0,
+            owned_by: owner,
+        }
     }
 }
 
@@ -157,7 +168,11 @@ impl Usage {
     pub fn estimate(prompt: &str, completion: &str) -> Self {
         let p = estimate_tokens(prompt);
         let c = estimate_tokens(completion);
-        Self { prompt_tokens: p, completion_tokens: c, total_tokens: p + c }
+        Self {
+            prompt_tokens: p,
+            completion_tokens: c,
+            total_tokens: p + c,
+        }
     }
 }
 
@@ -186,13 +201,23 @@ pub struct Delta {
 }
 
 impl ChatChunk {
-    pub fn new(id: &str, created: u64, model: &str, delta: Delta, finish: Option<&'static str>) -> Self {
+    pub fn new(
+        id: &str,
+        created: u64,
+        model: &str,
+        delta: Delta,
+        finish: Option<&'static str>,
+    ) -> Self {
         Self {
             id: id.to_string(),
             object: "chat.completion.chunk",
             created,
             model: model.to_string(),
-            choices: vec![ChunkChoice { index: 0, delta, finish_reason: finish }],
+            choices: vec![ChunkChoice {
+                index: 0,
+                delta,
+                finish_reason: finish,
+            }],
         }
     }
 }

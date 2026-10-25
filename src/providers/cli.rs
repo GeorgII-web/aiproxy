@@ -1,5 +1,6 @@
 //! Claude Code and Junie: one process per request, NDJSON on stdout.
 
+use std::sync::RwLock;
 use std::time::{Duration, Instant};
 
 use async_stream::try_stream;
@@ -9,6 +10,22 @@ use super::process::{self, Launch};
 use super::{DeltaStream, ProviderError};
 use crate::config::{AgentConfig, ProviderConfig};
 use crate::openai::ChatInput;
+
+/// Claude Code has no list command; these are the current API ids (aliases come from `--help`).
+const CLAUDE_MODELS: &[&str] = &[
+    "claude-fable-5-1",
+    "claude-fable-5",
+    "claude-opus-5-5",
+    "claude-opus-5",
+    "claude-opus-4-8",
+    "claude-opus-4-7",
+    "claude-opus-4-6",
+    "claude-sonnet-5-5",
+    "claude-sonnet-5",
+    "claude-sonnet-4-6",
+    "claude-haiku-5-5",
+    "claude-haiku-4-5",
+];
 
 #[derive(Clone, Copy, Debug)]
 pub enum Flavor {
@@ -21,19 +38,96 @@ pub enum Flavor {
 pub struct CliProvider {
     pub cfg: ProviderConfig,
     pub flavor: Flavor,
+    /// Models reported by the CLI (`discover`), exposed next to the configured agents.
+    discovered: RwLock<Vec<String>>,
 }
 
 impl CliProvider {
+    pub fn new(cfg: ProviderConfig, flavor: Flavor) -> Self {
+        Self {
+            cfg,
+            flavor,
+            discovered: RwLock::new(Vec::new()),
+        }
+    }
+
+    pub fn discovered(&self) -> Vec<String> {
+        self.discovered.read().unwrap().clone()
+    }
+
+    /// Asks the CLI for its models and stores them. Junie prints the list when given an
+    /// unknown `--model`; Claude's aliases are parsed from `--help`, full ids are built in.
+    pub async fn discover(&self) -> Result<Vec<String>, ProviderError> {
+        let mut launch = Launch::new(&self.cfg);
+        let mut models: Vec<String> = Vec::new();
+        match self.flavor {
+            Flavor::Junie => {
+                launch.args([
+                    "--skip-update-check",
+                    "--model=__list__",
+                    "--task=list models",
+                ]);
+                let out = self.output(launch).await?;
+                models.extend(
+                    out.lines()
+                        .filter_map(|l| l.strip_prefix("- "))
+                        .map(|m| m.trim().to_string()),
+                );
+            }
+            Flavor::Claude => {
+                launch.arg("--help");
+                let out = self.output(launch).await?;
+                let block = out.split("--model <model>").nth(1).unwrap_or("");
+                let block = block.split("\n  -").next().unwrap_or("");
+                for part in block.split('\'').skip(1).step_by(2) {
+                    if !part.is_empty() && part.chars().all(|c| c.is_ascii_lowercase()) {
+                        models.push(part.to_string());
+                    }
+                }
+                models.extend(CLAUDE_MODELS.iter().map(|m| m.to_string()));
+            }
+        }
+        models.retain(|m| !m.is_empty());
+        models.dedup();
+        tracing::info!(provider = %self.cfg.id, count = models.len(), "models discovered");
+        *self.discovered.write().unwrap() = models.clone();
+        Ok(models)
+    }
+
+    /// stdout + stderr of a short run (Junie answers on stderr).
+    async fn output(&self, launch: Launch) -> Result<String, ProviderError> {
+        let mut cmd = launch.command().await;
+        let id = &self.cfg.id;
+        let out = tokio::time::timeout(Duration::from_secs(120), cmd.output())
+            .await
+            .map_err(|_| ProviderError(format!("{id}: model discovery timed out")))?
+            .map_err(|e| {
+                ProviderError(format!("{id}: cannot start {}: {e}", self.cfg.command()))
+            })?;
+        let mut text = String::from_utf8_lossy(&out.stdout).into_owned();
+        text.push('\n');
+        text.push_str(&String::from_utf8_lossy(&out.stderr));
+        Ok(text)
+    }
     fn build(&self, agent: &AgentConfig, input: &ChatInput) -> (Launch, Option<String>) {
         let mut cmd = Launch::new(&self.cfg);
-        let system: Vec<&str> = [agent.system_prompt.as_str(), input.system.as_deref().unwrap_or("")]
-            .into_iter()
-            .filter(|s| !s.trim().is_empty())
-            .collect();
+        let system: Vec<&str> = [
+            agent.system_prompt.as_str(),
+            input.system.as_deref().unwrap_or(""),
+        ]
+        .into_iter()
+        .filter(|s| !s.trim().is_empty())
+        .collect();
         let system = (!system.is_empty()).then(|| system.join("\n\n"));
         match self.flavor {
             Flavor::Claude => {
-                cmd.args(["-p", "--output-format", "stream-json", "--verbose", "--include-partial-messages"]);
+                cmd.args([
+                    "-p",
+                    "--output-format",
+                    "stream-json",
+                    "--verbose",
+                    "--include-partial-messages",
+                ]);
                 if !agent.model.is_empty() {
                     cmd.args(["--model", &agent.model]);
                 }
@@ -195,7 +289,11 @@ impl Parser {
                 Event::None
             }
             "error" => Event::Error(
-                v["message"].as_str().or(v["error"].as_str()).unwrap_or("junie reported an error").to_string(),
+                v["message"]
+                    .as_str()
+                    .or(v["error"].as_str())
+                    .unwrap_or("junie reported an error")
+                    .to_string(),
             ),
             _ => Event::None,
         }

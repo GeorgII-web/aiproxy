@@ -28,7 +28,11 @@ impl Paths {
         let logs_dir = home.join("logs");
         std::fs::create_dir_all(&logs_dir)
             .with_context(|| format!("cannot create {}", logs_dir.display()))?;
-        Ok(Self { config_file: home.join("config.toml"), logs_dir, home })
+        Ok(Self {
+            config_file: home.join("config.toml"),
+            logs_dir,
+            home,
+        })
     }
 
     /// `sidecar/` next to the executable, or the source tree's copy in dev.
@@ -119,6 +123,8 @@ pub struct ProviderConfig {
     /// wsl: distribution name (`wsl -l`); empty = the default one.
     #[serde(skip_serializing_if = "String::is_empty")]
     pub wsl_distro: String,
+    /// CLI kinds: ask the CLI for its model list at startup and expose every model as `<id>/<model>`.
+    pub discover_models: bool,
     /// CLI binary (claude-cli, junie-cli) or the node binary (deepseek-web). Empty = kind default.
     #[serde(skip_serializing_if = "String::is_empty")]
     pub command: String,
@@ -143,6 +149,10 @@ pub struct ProviderConfig {
     /// deepseek-web: Playwright browser channel: `chromium` (default), `chrome`, `msedge`.
     #[serde(skip_serializing_if = "String::is_empty")]
     pub browser: String,
+    /// deepseek-web: JSON with `token` / `cookie` of an existing session (FreeDeepseekAPI's
+    /// `deepseek-auth.json`), imported once before the login window opens.
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub auth_file: String,
     pub agents: Vec<AgentConfig>,
 }
 
@@ -154,6 +164,7 @@ impl Default for ProviderConfig {
             enabled: true,
             runtime: Runtime::default(),
             wsl_distro: String::new(),
+            discover_models: true,
             command: String::new(),
             workdir: String::new(),
             timeout_secs: 600,
@@ -162,6 +173,7 @@ impl Default for ProviderConfig {
             profile_dir: String::new(),
             sidecar_dir: String::new(),
             browser: String::new(),
+            auth_file: String::new(),
             agents: Vec::new(),
         }
     }
@@ -207,18 +219,29 @@ impl Default for Settings {
 
 impl Default for ServerSettings {
     fn default() -> Self {
-        Self { host: "127.0.0.1".into(), port: 8787, api_key: String::new() }
+        Self {
+            host: "127.0.0.1".into(),
+            port: 8787,
+            api_key: String::new(),
+        }
     }
 }
 
 impl Default for LoggingSettings {
     fn default() -> Self {
-        Self { level: "info".into(), keep_files: 7 }
+        Self {
+            level: "info".into(),
+            keep_files: 7,
+        }
     }
 }
 
 fn agent(name: &str, model: &str) -> AgentConfig {
-    AgentConfig { name: name.into(), model: model.into(), ..Default::default() }
+    AgentConfig {
+        name: name.into(),
+        model: model.into(),
+        ..Default::default()
+    }
 }
 
 fn default_providers() -> Vec<ProviderConfig> {
@@ -227,7 +250,11 @@ fn default_providers() -> Vec<ProviderConfig> {
             id: "claude".into(),
             kind: ProviderKind::ClaudeCli,
             timeout_secs: 600,
-            agents: vec![agent("sonnet", "sonnet"), agent("opus", "opus"), agent("haiku", "haiku")],
+            agents: vec![
+                agent("sonnet", "sonnet"),
+                agent("opus", "opus"),
+                agent("haiku", "haiku"),
+            ],
             ..Default::default()
         },
         ProviderConfig {
@@ -304,7 +331,10 @@ impl Settings {
     }
 
     pub fn providers_toml(&self) -> String {
-        toml::to_string_pretty(&ProvidersDoc { providers: self.providers.clone() }).unwrap_or_default()
+        toml::to_string_pretty(&ProvidersDoc {
+            providers: self.providers.clone(),
+        })
+        .unwrap_or_default()
     }
 
     pub fn parse_providers_toml(text: &str) -> Result<Vec<ProviderConfig>> {

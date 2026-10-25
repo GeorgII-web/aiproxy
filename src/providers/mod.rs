@@ -26,6 +26,7 @@ impl std::error::Error for ProviderError {}
 
 pub type DeltaStream = Pin<Box<dyn Stream<Item = Result<String, ProviderError>> + Send>>;
 
+#[allow(clippy::large_enum_variant)]
 pub enum Provider {
     Cli(cli::CliProvider),
     Deepseek(Arc<deepseek::DeepseekProvider>),
@@ -42,14 +43,43 @@ impl Provider {
     fn agents(&self) -> Vec<AgentConfig> {
         let cfg = self.cfg();
         if cfg.agents.is_empty() {
-            return vec![AgentConfig { name: cfg.id.clone(), ..Default::default() }];
+            return vec![AgentConfig {
+                name: cfg.id.clone(),
+                ..Default::default()
+            }];
         }
         cfg.agents.clone()
     }
 
+    /// Configured agents first, then the CLI's own models (pass-through agents).
     pub fn model_ids(&self) -> Vec<String> {
         let id = &self.cfg().id;
-        self.agents().iter().map(|a| format!("{id}/{}", a.name)).collect()
+        let mut ids: Vec<String> = self
+            .agents()
+            .iter()
+            .map(|a| format!("{id}/{}", a.name))
+            .collect();
+        for m in self.discovered() {
+            let full = format!("{id}/{m}");
+            if !ids.contains(&full) {
+                ids.push(full);
+            }
+        }
+        ids
+    }
+
+    pub fn discovered(&self) -> Vec<String> {
+        match self {
+            Provider::Cli(p) => p.discovered(),
+            Provider::Deepseek(_) => Vec::new(),
+        }
+    }
+
+    pub async fn discover(&self) -> Result<Vec<String>, ProviderError> {
+        match self {
+            Provider::Cli(p) if p.cfg.discover_models => p.discover().await,
+            _ => Ok(Vec::new()),
+        }
     }
 
     pub fn chat(&self, agent: &AgentConfig, input: ChatInput) -> DeltaStream {
@@ -85,14 +115,14 @@ impl Registry {
             .map(|c| {
                 let p = match c.kind {
                     ProviderKind::ClaudeCli => {
-                        Provider::Cli(cli::CliProvider { cfg: c.clone(), flavor: cli::Flavor::Claude })
+                        Provider::Cli(cli::CliProvider::new(c.clone(), cli::Flavor::Claude))
                     }
                     ProviderKind::JunieCli => {
-                        Provider::Cli(cli::CliProvider { cfg: c.clone(), flavor: cli::Flavor::Junie })
+                        Provider::Cli(cli::CliProvider::new(c.clone(), cli::Flavor::Junie))
                     }
-                    ProviderKind::DeepseekWeb => {
-                        Provider::Deepseek(Arc::new(deepseek::DeepseekProvider::new(c.clone(), paths)))
-                    }
+                    ProviderKind::DeepseekWeb => Provider::Deepseek(Arc::new(
+                        deepseek::DeepseekProvider::new(c.clone(), paths),
+                    )),
                 };
                 Arc::new(p)
             })
@@ -100,8 +130,20 @@ impl Registry {
         Self { providers }
     }
 
-    pub fn providers(&self) -> &[Arc<Provider>] {
-        &self.providers
+    pub fn provider(&self, id: &str) -> Option<Arc<Provider>> {
+        self.providers.iter().find(|p| p.cfg().id == id).cloned()
+    }
+
+    /// Runs model discovery of every provider in the background (needs a Tokio context).
+    pub fn start_discovery(&self) {
+        for p in &self.providers {
+            let p = p.clone();
+            tokio::spawn(async move {
+                if let Err(e) = p.discover().await {
+                    tracing::warn!("{e}");
+                }
+            });
+        }
     }
 
     pub fn models(&self) -> Vec<String> {
@@ -121,13 +163,19 @@ impl Registry {
             None => agents.first().cloned()?,
             Some(name) => match agents.iter().find(|a| a.name == name) {
                 Some(a) => a.clone(),
-                None if matches!(*provider, Provider::Cli(_)) => {
-                    AgentConfig { name: name.into(), model: name.into(), ..Default::default() }
-                }
+                None if matches!(*provider, Provider::Cli(_)) => AgentConfig {
+                    name: name.into(),
+                    model: name.into(),
+                    ..Default::default()
+                },
                 None => return None,
             },
         };
-        Some(Resolved { model_id: format!("{pid}/{}", agent.name), provider, agent })
+        Some(Resolved {
+            model_id: format!("{pid}/{}", agent.name),
+            provider,
+            agent,
+        })
     }
 
     pub fn deepseek(&self, id: &str) -> Option<Arc<deepseek::DeepseekProvider>> {

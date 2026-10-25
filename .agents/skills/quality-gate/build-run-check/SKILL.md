@@ -1,24 +1,37 @@
 ---
 name: build-run-check
-description: How to check, build, cross-build and smoke-test aiproxy — `cargo check` for Linux and `x86_64-pc-windows-gnu`, clippy, the Windows exe via `cargo zigbuild` from WSL, installing it into the Windows profile, running the Linux foreground server, curl smoke tests for models, chat, streaming and error paths, and testing the Windows exe from WSL with `curl.exe`. Use when reporting a change done, building for Windows, or verifying something end to end.
+description: How to check, build, release and smoke-test aiproxy — the gates (`cargo test`, `cargo fmt --check`, clippy with `-D warnings` for Linux and via `scripts/cargo-gnu.sh` for Windows), the static Windows exe from WSL with MinGW, installing it into the Windows profile, the GitHub release workflow on a `v*` tag, running the Linux foreground server, curl smoke tests for models, discovery, chat, streaming and error paths, and testing the Windows exe from WSL with `curl.exe`. Use when reporting a change done, building for Windows, publishing a release, or verifying something end to end.
 ---
 
 # Build, run, check
 
-## Gates before "done"
+## Gates before "done" (the release workflow runs the same lines)
 
 ```bash
-cargo check && cargo check --target x86_64-pc-windows-gnu   # Linux build and the tray code
-cargo clippy                                                # accepted: "large size difference between variants"
+cargo test                                               # no unit tests yet; compiles the Linux build
+cargo fmt --check
+cargo clippy --all-targets -- -D warnings                # Linux: `Provider` carries allow(large_enum_variant)
+scripts/cargo-gnu.sh clippy --all-targets -- -D warnings # Windows code (tray)
+scripts/cargo-gnu.sh build --release                     # target/x86_64-pc-windows-gnu/release/aiproxy.exe
 node --check sidecar/deepseek.mjs
 ```
 
 ## Windows exe from WSL (no Windows toolchain)
 
+`scripts/cargo-gnu.sh` (copied from kbswitch): on first use `apt-get download` + `dpkg -x` of the MinGW
+packages into `~/.local/opt/mingw-w64` (no sudo), then cargo with `x86_64-w64-mingw32-gcc-win32` as linker and
+`+crt-static`, so the exe (~2.7 MB, `lto`, `panic = "abort"`, `strip`) needs only system DLLs.
+Alternative without MinGW: `cargo zigbuild --release --target x86_64-pc-windows-gnu` with `cargo-zigbuild`
+and `ziglang` from pip in a venv.
+
+## Release
+
+`.github/workflows/release.yml` runs on a pushed tag `v*`: the gates above on `ubuntu-24.04`, the static exe,
+`aiproxy-sidecar.zip` (`sidecar/deepseek.mjs` + `package.json`), then `softprops/action-gh-release` with
+generated notes. Bump `version` in `Cargo.toml` first (the tray and `/api/status` show it).
+
 ```bash
-python3 -m venv ~/.venvs/zigbuild && ~/.venvs/zigbuild/bin/pip install cargo-zigbuild ziglang   # once
-PATH=~/.venvs/zigbuild/bin:$PATH cargo zigbuild --release --target x86_64-pc-windows-gnu
-# target/x86_64-pc-windows-gnu/release/aiproxy.exe (~3 MB, lto + strip)
+git tag v0.1.0 && git push origin v0.1.0
 ```
 
 Install: copy to `C:\Users\<user>\AppData\Local\aiproxy\aiproxy.exe` (`/mnt/c/...` from WSL); a running exe is
@@ -49,7 +62,9 @@ port change → `restart: true` and the new port answers `/health`. Stop a backg
 /mnt/c/WINDOWS/system32/tasklist.exe /FI "IMAGENAME eq aiproxy.exe"
 ```
 
-WSL runtime checks: the log shows `wsl: claude = /home/.../claude` once per name; test resolution by hand with
+Model discovery: the log shows `models discovered provider=claude count=15` and `provider=junie count=46`
+about 2-20 s after start (Junie runs a JVM); `POST /api/providers/junie/discover` re-runs it. WSL runtime
+checks: the log shows `wsl: claude = /home/.../claude` once per name; test resolution by hand with
 `wsl.exe --exec /bin/bash -ilc 'command -v node'` (login + interactive, otherwise nvm paths are missing).
 
 ## DeepSeek checks

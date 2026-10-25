@@ -20,13 +20,14 @@ pub async fn status(State(state): State<Arc<AppState>>) -> Json<serde_json::Valu
     let providers: Vec<_> = configured
         .iter()
         .map(|c| {
-            let models = registry
-                .providers()
-                .iter()
-                .find(|p| p.cfg().id == c.id)
-                .map(|p| p.model_ids())
+            let live = registry.provider(&c.id);
+            let agents: Vec<String> = c.agents.iter().map(|a| format!("{}/{}", c.id, a.name)).collect();
+            let discovered: Vec<String> = live
+                .as_ref()
+                .map(|p| p.discovered().into_iter().map(|m| format!("{}/{m}", c.id)).collect())
                 .unwrap_or_default();
-            json!({ "id": c.id, "kind": c.kind, "enabled": c.enabled, "command": c.command(), "models": models })
+            json!({ "id": c.id, "kind": c.kind, "enabled": c.enabled, "runtime": c.runtime, "command": c.command(),
+                    "discover": c.discover_models, "models": agents, "discovered": discovered })
         })
         .collect();
     Json(json!({
@@ -57,15 +58,37 @@ pub async fn get_settings(State(state): State<Arc<AppState>>) -> Json<SettingsVi
     })
 }
 
-pub async fn put_settings(State(state): State<Arc<AppState>>, Json(view): Json<SettingsView>) -> Response {
+pub async fn put_settings(
+    State(state): State<Arc<AppState>>,
+    Json(view): Json<SettingsView>,
+) -> Response {
     let providers = match Settings::parse_providers_toml(&view.providers_toml) {
         Ok(p) => p,
-        Err(e) => return error(StatusCode::BAD_REQUEST, format!("{e:#}"), "invalid_request_error", None),
+        Err(e) => {
+            return error(
+                StatusCode::BAD_REQUEST,
+                format!("{e:#}"),
+                "invalid_request_error",
+                None,
+            )
+        }
     };
-    let settings = Settings { server: view.server, app: view.app, logging: view.logging, providers };
+    let settings = Settings {
+        server: view.server,
+        app: view.app,
+        logging: view.logging,
+        providers,
+    };
     match state.apply_settings(settings) {
-        Ok(restart) => Json(json!({ "restart": restart, "base_url": state.base_url() })).into_response(),
-        Err(e) => error(StatusCode::BAD_REQUEST, format!("{e:#}"), "invalid_request_error", None),
+        Ok(restart) => {
+            Json(json!({ "restart": restart, "base_url": state.base_url() })).into_response()
+        }
+        Err(e) => error(
+            StatusCode::BAD_REQUEST,
+            format!("{e:#}"),
+            "invalid_request_error",
+            None,
+        ),
     }
 }
 
@@ -82,17 +105,54 @@ fn default_lines() -> usize {
 pub async fn logs(State(state): State<Arc<AppState>>, Query(q): Query<LogsQuery>) -> Response {
     match state.log.tail(q.lines.clamp(1, 5000)) {
         Ok(text) => text.into_response(),
-        Err(e) => error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string(), "server_error", None),
+        Err(e) => error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            e.to_string(),
+            "server_error",
+            None,
+        ),
+    }
+}
+
+/// Re-runs model discovery of one provider and returns its full model list.
+pub async fn discover(State(state): State<Arc<AppState>>, Path(id): Path<String>) -> Response {
+    let provider = state.registry.read().unwrap().provider(&id);
+    let Some(provider) = provider else {
+        return error(
+            StatusCode::NOT_FOUND,
+            format!("no enabled provider {id:?}"),
+            "invalid_request_error",
+            None,
+        );
+    };
+    match provider.discover().await {
+        Ok(_) => Json(json!({ "models": provider.model_ids() })).into_response(),
+        Err(e) => error(
+            StatusCode::BAD_GATEWAY,
+            e.to_string(),
+            "server_error",
+            Some("provider_error"),
+        ),
     }
 }
 
 pub async fn login(State(state): State<Arc<AppState>>, Path(id): Path<String>) -> Response {
     let provider = state.registry.read().unwrap().deepseek(&id);
     let Some(provider) = provider else {
-        return error(StatusCode::NOT_FOUND, format!("no deepseek-web provider {id:?}"), "invalid_request_error", None);
+        return error(
+            StatusCode::NOT_FOUND,
+            format!("no deepseek-web provider {id:?}"),
+            "invalid_request_error",
+            None,
+        );
     };
     match provider.login().await {
         Ok(()) => Json(json!({ "ok": true })).into_response(),
-        Err(e) => error(StatusCode::BAD_GATEWAY, e.to_string(), "server_error", Some("provider_error")),
+        Err(e) => error(
+            StatusCode::BAD_GATEWAY,
+            e.to_string(),
+            "server_error",
+            Some("provider_error"),
+        ),
     }
 }

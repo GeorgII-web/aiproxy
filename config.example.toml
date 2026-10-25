@@ -23,6 +23,7 @@ id = "claude"
 kind = "claude-cli"
 enabled = true
 runtime = "wsl"              # native | wsl
+discover_models = true       # also expose every model the CLI itself lists, as claude/<model>
 # wsl_distro = "Ubuntu-24.04"  # empty = default distribution
 command = "claude"           # or a full path; on Windows claude.exe/.cmd are found on PATH
 timeout_secs = 600
@@ -71,6 +72,7 @@ url = "https://chat.deepseek.com"
 browser = "chromium"         # chromium | chrome | msedge
 # profile_dir = ""           # cookies; default <home>/deepseek-profile (wsl: <sidecar_dir>/profile)
 # sidecar_dir = ""           # default: sidecar/ next to aiproxy.exe (wsl: Linux path of the sidecar folder)
+# auth_file = ""             # import an existing session: JSON with "token" and/or "cookie" (deepseek-auth.json)
 
 [[providers.agents]]
 name = "deepseek"

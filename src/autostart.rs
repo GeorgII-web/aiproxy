@@ -15,7 +15,9 @@ fn launcher() -> Result<AutoLaunch> {
 }
 
 pub fn is_enabled() -> bool {
-    launcher().and_then(|l| l.is_enabled().map_err(|e| anyhow!("{e}"))).unwrap_or(false)
+    launcher()
+        .and_then(|l| l.is_enabled().map_err(|e| anyhow!("{e}")))
+        .unwrap_or(false)
 }
 
 pub fn set(enabled: bool) -> Result<()> {

@@ -22,7 +22,7 @@ fn main() -> Result<()> {
     autostart::sync(settings.app.autostart);
 
     let rt = tokio::runtime::Runtime::new()?;
-    let state = app::AppState::new(paths, settings, log);
+    let state = app::AppState::new(paths, settings, log, rt.handle().clone());
     if let Err(e) = rt.block_on(state.start_server()) {
         tracing::error!("{e:#}");
     }

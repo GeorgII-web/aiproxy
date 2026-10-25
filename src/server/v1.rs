@@ -20,7 +20,10 @@ use crate::providers::{DeltaStream, ProviderError};
 pub async fn models(State(state): State<Arc<AppState>>) -> Json<ModelList> {
     let registry = state.registry.read().unwrap().clone();
     let data = registry.models().iter().map(|id| Model::new(id)).collect();
-    Json(ModelList { object: "list", data })
+    Json(ModelList {
+        object: "list",
+        data,
+    })
 }
 
 pub async fn model(State(state): State<Arc<AppState>>, Path(id): Path<String>) -> Response {
@@ -41,7 +44,12 @@ fn not_found(model: &str) -> Response {
 }
 
 fn upstream(e: &ProviderError) -> Response {
-    error(StatusCode::BAD_GATEWAY, e.to_string(), "server_error", Some("provider_error"))
+    error(
+        StatusCode::BAD_GATEWAY,
+        e.to_string(),
+        "server_error",
+        Some("provider_error"),
+    )
 }
 
 pub async fn chat(
@@ -50,7 +58,14 @@ pub async fn chat(
 ) -> Response {
     let req = match body {
         Ok(Json(r)) => r,
-        Err(e) => return error(StatusCode::BAD_REQUEST, e.body_text(), "invalid_request_error", None),
+        Err(e) => {
+            return error(
+                StatusCode::BAD_REQUEST,
+                e.body_text(),
+                "invalid_request_error",
+                None,
+            )
+        }
     };
     let registry = state.registry.read().unwrap().clone();
     let Some(resolved) = registry.resolve(&req.model) else {
@@ -95,7 +110,14 @@ pub async fn chat(
         object: "chat.completion",
         created,
         model,
-        choices: vec![Choice { index: 0, message: AssistantMessage { role: "assistant", content }, finish_reason: "stop" }],
+        choices: vec![Choice {
+            index: 0,
+            message: AssistantMessage {
+                role: "assistant",
+                content,
+            },
+            finish_reason: "stop",
+        }],
         usage,
     };
     Json(response).into_response()
@@ -124,5 +146,7 @@ fn sse(id: String, created: u64, model: String, mut deltas: DeltaStream) -> Resp
         yield Ok(Event::default().json_data(last).expect("serializable"));
         yield Ok(Event::default().data("[DONE]"));
     };
-    Sse::new(events).keep_alive(KeepAlive::default()).into_response()
+    Sse::new(events)
+        .keep_alive(KeepAlive::default())
+        .into_response()
 }

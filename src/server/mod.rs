@@ -22,9 +22,13 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/", get(ui))
         .route("/health", get(|| async { "ok" }))
         .route("/api/status", get(api::status))
-        .route("/api/settings", get(api::get_settings).put(api::put_settings))
+        .route(
+            "/api/settings",
+            get(api::get_settings).put(api::put_settings),
+        )
         .route("/api/logs", get(api::logs))
         .route("/api/providers/{id}/login", post(api::login))
+        .route("/api/providers/{id}/discover", post(api::discover))
         .route("/v1/models", get(v1::models))
         .route("/v1/models/{*id}", get(v1::model))
         .route("/v1/chat/completions", post(v1::chat))
@@ -56,8 +60,20 @@ async fn not_found(req: Request) -> Response {
     )
 }
 
-pub fn error(status: StatusCode, message: impl Into<String>, kind: &'static str, code: Option<&'static str>) -> Response {
-    let body = ErrorBody { error: ApiError { message: message.into(), kind, param: None, code } };
+pub fn error(
+    status: StatusCode,
+    message: impl Into<String>,
+    kind: &'static str,
+    code: Option<&'static str>,
+) -> Response {
+    let body = ErrorBody {
+        error: ApiError {
+            message: message.into(),
+            kind,
+            param: None,
+            code,
+        },
+    };
     (status, Json(body)).into_response()
 }
 
@@ -77,7 +93,12 @@ async fn auth(State(state): State<Arc<AppState>>, req: Request, next: Next) -> R
     if ok {
         next.run(req).await
     } else {
-        error(StatusCode::UNAUTHORIZED, "invalid api key", "invalid_request_error", Some("invalid_api_key"))
+        error(
+            StatusCode::UNAUTHORIZED,
+            "invalid api key",
+            "invalid_request_error",
+            Some("invalid_api_key"),
+        )
     }
 }
 

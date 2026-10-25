@@ -35,7 +35,7 @@
 
   <section>
     <h2>Status</h2>
-    <table id="providers"><thead><tr><th>Provider</th><th>Kind</th><th>Command</th><th>Models</th><th></th></tr></thead><tbody></tbody></table>
+    <table id="providers"><thead><tr><th>Provider</th><th>Kind / runtime</th><th>Models (agents, then the CLI's own list)</th><th></th></tr></thead><tbody></tbody></table>
     <p style="color:var(--muted);margin:10px 0 0">DeepSeek logs in by itself: the first request without a session opens a browser window. <b>Log in / re-login</b> opens it on demand (new account, expired session).</p>
     <p style="color:var(--muted);margin:10px 0 0">Config: <code id="cfgpath"></code> · Logs: <code id="logpath"></code></p>
   </section>
@@ -94,8 +94,16 @@ async function loadStatus() {
   $('base').innerHTML = `<code>${s.base_url}/v1</code>`;
   $('cfgpath').textContent = s.config_file; $('logpath').textContent = s.logs_dir;
   $('providers').querySelector('tbody').innerHTML = s.providers.map(p =>
-    `<tr style="${p.enabled ? '' : 'opacity:.5'}"><td>${p.id}</td><td>${p.kind}</td><td><code>${p.command}</code></td><td>${p.models.map(m => `<code>${m}</code>`).join(' ') || '—'}</td><td>${p.kind === 'deepseek-web' && p.enabled ? `<button class="secondary login" data-id="${p.id}">Log in / re-login</button>` : ''}</td></tr>`).join('');
+    `<tr style="${p.enabled ? '' : 'opacity:.5'}"><td>${p.id}<br><code>${p.command}</code></td><td>${p.kind}<br>${p.runtime}</td>
+     <td>${p.models.map(m => `<code>${m}</code>`).join(' ') || '—'}${p.discovered.length ? '<br>' + p.discovered.map(m => `<code style="opacity:.75">${m}</code>`).join(' ') : ''}</td>
+     <td>${p.kind === 'deepseek-web' && p.enabled ? `<button class="secondary login" data-id="${p.id}">Log in / re-login</button>` : ''}${p.kind !== 'deepseek-web' && p.enabled && p.discover ? `<button class="secondary discover" data-id="${p.id}">Refresh models</button>` : ''}</td></tr>`).join('');
   for (const b of document.querySelectorAll('button.login')) b.onclick = () => login(b.dataset.id);
+  for (const b of document.querySelectorAll('button.discover')) b.onclick = () => discover(b.dataset.id);
+}
+async function discover(id) {
+  say(`${id}: asking the CLI for its models …`);
+  try { const r = await api('/api/providers/' + id + '/discover', { method: 'POST' }); say(`${id}: ${r.models.length} models.`, 'ok'); await loadStatus(); }
+  catch (e) { say(e.message, 'bad'); }
 }
 async function login(id) {
   say(`${id}: a browser window opens, log in there. Waiting …`);

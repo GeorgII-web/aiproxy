@@ -31,6 +31,12 @@ foreign `id` are skipped. `run()` returns `Err` only when the sidecar itself is 
 4. `POST /api/providers/{id}/login` (`DeepseekProvider::login`) sends `op: login` = forced visible browser, 20 min
    window; the settings page button **Log in / re-login** calls it. There is no tray item for it by design.
 
+Before the visible browser opens, `importAuth()` is tried once per sidecar run when `AIPROXY_AUTH_FILE`
+(config `auth_file`) points to a JSON with `token` and/or `cookie` (FreeDeepseekAPI's `deepseek-auth.json`):
+cookies are added for the site's domain, the token is written to `localStorage.userToken` as
+`{"value": token, "__version": "0"}`, the page reloads and `loggedIn()` decides. The file is a secret: keep it
+outside the repo (`.gitignore` has `deepseek-auth.json`).
+
 Cookies live in `launchPersistentContext(PROFILE)`: native runtime `<home>/deepseek-profile`, WSL runtime
 `<sidecar_dir>/profile` unless `profile_dir` is set. Deleting that folder = full logout.
 

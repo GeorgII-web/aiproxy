@@ -20,6 +20,8 @@ pub struct AppState {
     pub settings: RwLock<Settings>,
     pub registry: RwLock<Arc<Registry>>,
     pub log: Logging,
+    /// Runtime handle for work started from outside Tokio (tray thread).
+    rt: tokio::runtime::Handle,
     server: Mutex<Option<ServerRun>>,
 }
 
@@ -29,13 +31,20 @@ struct ServerRun {
 }
 
 impl AppState {
-    pub fn new(paths: Paths, settings: Settings, log: Logging) -> Arc<Self> {
+    pub fn new(
+        paths: Paths,
+        settings: Settings,
+        log: Logging,
+        rt: tokio::runtime::Handle,
+    ) -> Arc<Self> {
         let registry = Arc::new(Registry::build(&settings, &paths));
+        rt.block_on(async { registry.start_discovery() });
         Arc::new(Self {
             paths,
             settings: RwLock::new(settings),
             registry: RwLock::new(registry),
             log,
+            rt,
             server: Mutex::new(None),
         })
     }
@@ -94,7 +103,9 @@ impl AppState {
         if old.logging.level != new.logging.level {
             self.log.set_level(&new.logging.level)?;
         }
-        *self.registry.write().unwrap() = Arc::new(Registry::build(&new, &self.paths));
+        let registry = Arc::new(Registry::build(&new, &self.paths));
+        self.rt.block_on(async { registry.start_discovery() });
+        *self.registry.write().unwrap() = registry;
         if old.app.autostart != new.app.autostart {
             if let Err(e) = autostart::set(new.app.autostart) {
                 tracing::warn!("{e:#}");
@@ -120,6 +131,12 @@ impl AppState {
             let _ = run.stop.send(());
             let _ = tokio::time::timeout(Duration::from_secs(2), run.task).await;
         }
-        *self.registry.write().unwrap() = Arc::new(Registry::build(&Settings { providers: vec![], ..Default::default() }, &self.paths));
+        *self.registry.write().unwrap() = Arc::new(Registry::build(
+            &Settings {
+                providers: vec![],
+                ..Default::default()
+            },
+            &self.paths,
+        ));
     }
 }

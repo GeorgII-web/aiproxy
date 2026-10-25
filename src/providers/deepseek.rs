@@ -54,7 +54,11 @@ impl Sidecar {
             // Linux paths of a WSL sidecar cannot be checked from Windows; the sidecar reports them.
             let script = p.sidecar_dir.join("deepseek.mjs");
             if !script.is_file() {
-                return Err(ProviderError(format!("{}: sidecar not found: {}", p.cfg.id, script.display())));
+                return Err(ProviderError(format!(
+                    "{}: sidecar not found: {}",
+                    p.cfg.id,
+                    script.display()
+                )));
             }
             if !p.sidecar_dir.join("node_modules").is_dir() {
                 return Err(ProviderError(format!(
@@ -67,18 +71,45 @@ impl Sidecar {
         let dir = launch.path(&p.sidecar_dir);
         launch.cwd = Some(dir.clone());
         launch
-            .arg(format!("{}/deepseek.mjs", dir.trim_end_matches(['/', '\\'])))
-            .env("AIPROXY_URL", if p.cfg.url.is_empty() { "https://chat.deepseek.com" } else { &p.cfg.url })
-            .env("AIPROXY_CHANNEL", if p.cfg.browser.is_empty() { "chromium" } else { &p.cfg.browser });
+            .arg(format!(
+                "{}/deepseek.mjs",
+                dir.trim_end_matches(['/', '\\'])
+            ))
+            .env(
+                "AIPROXY_URL",
+                if p.cfg.url.is_empty() {
+                    "https://chat.deepseek.com"
+                } else {
+                    &p.cfg.url
+                },
+            )
+            .env(
+                "AIPROXY_CHANNEL",
+                if p.cfg.browser.is_empty() {
+                    "chromium"
+                } else {
+                    &p.cfg.browser
+                },
+            );
+        if !p.cfg.auth_file.is_empty() {
+            launch.env(
+                "AIPROXY_AUTH_FILE",
+                launch.path(std::path::Path::new(&p.cfg.auth_file)),
+            );
+        }
         // WSL default profile: the sidecar's own `<sidecar_dir>/profile`, a Linux path.
         if !(launch.is_wsl() && p.cfg.profile_dir.is_empty()) {
             launch.env("AIPROXY_PROFILE_DIR", launch.path(&p.profile_dir));
         }
         let mut cmd = launch.command().await;
         cmd.stdin(std::process::Stdio::piped());
-        let mut child = cmd
-            .spawn()
-            .map_err(|e| ProviderError(format!("{}: cannot start {}: {e}", p.cfg.id, p.cfg.command())))?;
+        let mut child = cmd.spawn().map_err(|e| {
+            ProviderError(format!(
+                "{}: cannot start {}: {e}",
+                p.cfg.id,
+                p.cfg.command()
+            ))
+        })?;
         let stdin = child.stdin.take().expect("stdin piped");
         let stdout = child.stdout.take().expect("stdout piped");
         let stderr = child.stderr.take().expect("stderr piped");
@@ -88,13 +119,22 @@ impl Sidecar {
                 tracing::warn!(target: "deepseek", "{line}");
             }
         });
-        let mut sc = Sidecar { _child: ChildGuard(child), stdin, lines: BufReader::new(stdout).lines() };
+        let mut sc = Sidecar {
+            _child: ChildGuard(child),
+            stdin,
+            lines: BufReader::new(stdout).lines(),
+        };
         let ready = tokio::time::timeout(Duration::from_secs(60), sc.next()).await;
         match ready {
             Ok(Ok(m)) if m.kind == "ready" => Ok(sc),
-            Ok(Ok(m)) => Err(ProviderError(format!("deepseek sidecar: unexpected {} message", m.kind))),
+            Ok(Ok(m)) => Err(ProviderError(format!(
+                "deepseek sidecar: unexpected {} message",
+                m.kind
+            ))),
             Ok(Err(e)) => Err(e),
-            Err(_) => Err(ProviderError("deepseek sidecar did not become ready".into())),
+            Err(_) => Err(ProviderError(
+                "deepseek sidecar did not become ready".into(),
+            )),
         }
     }
 
@@ -146,7 +186,12 @@ impl DeepseekProvider {
         } else {
             PathBuf::from(&cfg.sidecar_dir)
         };
-        Self { cfg, profile_dir, sidecar_dir, sidecar: Arc::new(Mutex::new(None)) }
+        Self {
+            cfg,
+            profile_dir,
+            sidecar_dir,
+            sidecar: Arc::new(Mutex::new(None)),
+        }
     }
 
     async fn acquire(self: &Arc<Self>) -> Result<OwnedMutexGuard<Option<Sidecar>>, ProviderError> {
@@ -235,7 +280,9 @@ async fn run(
             }
             "done" => return Ok(()),
             "error" => {
-                let _ = tx.send(Err(ProviderError(format!("deepseek: {}", msg.message)))).await;
+                let _ = tx
+                    .send(Err(ProviderError(format!("deepseek: {}", msg.message))))
+                    .await;
                 return Ok(());
             }
             _ => {}
