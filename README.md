@@ -14,7 +14,8 @@ Providers and their agents are configuration, not code: an agent is a name plus 
 system prompt and extra CLI arguments, exposed as model `<provider id>/<agent name>`. On top of
 the agents, each CLI provider lists the CLI's own models (`discover_models`, on by default):
 Junie reports its full list (Claude, GPT, Gemini, Grok ...), Claude Code its aliases plus the
-known model ids. Every listed id works as `<provider id>/<model>`. Each
+known model ids. Every listed id works as `<provider id>/<model>`; the settings page shows them all as one
+comma-separated list with a **Copy** button for clients that take a model list (goose). Each
 provider runs either on Windows (`runtime = "native"`) or inside WSL (`runtime = "wsl"`),
 so the CLIs can live on whichever side they are installed.
 

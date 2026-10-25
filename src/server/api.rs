@@ -24,7 +24,13 @@ pub async fn status(State(state): State<Arc<AppState>>) -> Json<serde_json::Valu
             let agents: Vec<String> = c.agents.iter().map(|a| format!("{}/{}", c.id, a.name)).collect();
             let discovered: Vec<String> = live
                 .as_ref()
-                .map(|p| p.discovered().into_iter().map(|m| format!("{}/{m}", c.id)).collect())
+                .map(|p| {
+                    p.discovered()
+                        .into_iter()
+                        .map(|m| format!("{}/{m}", c.id))
+                        .filter(|m| !agents.contains(m))
+                        .collect()
+                })
                 .unwrap_or_default();
             json!({ "id": c.id, "kind": c.kind, "enabled": c.enabled, "runtime": c.runtime, "command": c.command(),
                     "discover": c.discover_models, "models": agents, "discovered": discovered })

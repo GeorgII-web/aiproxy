@@ -41,6 +41,12 @@
   </section>
 
   <section>
+    <div class="row" style="justify-content:space-between"><h2>Models for clients</h2><button id="copy_models" class="secondary">Copy</button></div>
+    <p style="color:var(--muted);margin:0 0 8px">All models of the enabled providers, comma separated, for client settings that take a model list (goose: <i>Models</i> field; the full id <code>provider/model</code> goes in).</p>
+    <textarea id="models_csv" readonly spellcheck="false" style="min-height:80px;white-space:pre-wrap"></textarea>
+  </section>
+
+  <section>
     <h2>Server</h2>
     <div class="grid">
       <label>Host <input id="host"></label>
@@ -97,6 +103,7 @@ async function loadStatus() {
     `<tr style="${p.enabled ? '' : 'opacity:.5'}"><td>${p.id}<br><code>${p.command}</code></td><td>${p.kind}<br>${p.runtime}</td>
      <td>${p.models.map(m => `<code>${m}</code>`).join(' ') || '—'}${p.discovered.length ? '<br>' + p.discovered.map(m => `<code style="opacity:.75">${m}</code>`).join(' ') : ''}</td>
      <td>${p.kind === 'deepseek-web' && p.enabled ? `<button class="secondary login" data-id="${p.id}">Log in / re-login</button>` : ''}${p.kind !== 'deepseek-web' && p.enabled && p.discover ? `<button class="secondary discover" data-id="${p.id}">Refresh models</button>` : ''}</td></tr>`).join('');
+  $('models_csv').value = s.providers.filter(p => p.enabled).flatMap(p => [...p.models, ...p.discovered]).join(',');
   for (const b of document.querySelectorAll('button.login')) b.onclick = () => login(b.dataset.id);
   for (const b of document.querySelectorAll('button.discover')) b.onclick = () => discover(b.dataset.id);
 }
@@ -133,6 +140,11 @@ $('save').onclick = async () => {
   } catch (e) { say(e.message, 'bad'); }
 };
 $('refresh').onclick = () => loadLog().catch(e => say(e.message, 'bad'));
+$('copy_models').onclick = async () => {
+  const t = $('models_csv'); t.select();
+  try { await navigator.clipboard.writeText(t.value); } catch { document.execCommand('copy'); }
+  say('Model list copied.', 'ok');
+};
 reload();
 </script>
 </body>

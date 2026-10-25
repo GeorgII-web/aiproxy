@@ -23,6 +23,8 @@ description: The Windows tray (`src/tray.rs`, tao + tray-icon, menu items and re
 
 - Single file, vanilla JS, served at `/`; talks to `/api/*` (see `../http-api/SKILL.md`).
 - Sections: Status (providers table with models and a **Log in / re-login** button per `deepseek-web` row),
+  Models for clients (readonly textarea `models_csv`: all models of the enabled providers, agents then discovered,
+  comma separated, with a **Copy** button; built from `/api/status` for clients like goose that take a model list),
   Server (host, port, api key, log level, keep files, autostart), Providers (TOML textarea), Log (200 lines,
   Refresh).
 - Save & apply sends `PUT /api/settings`; on `restart: true` the page redirects to the new base URL after 1.5 s.
