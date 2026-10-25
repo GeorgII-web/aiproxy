@@ -28,6 +28,10 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/v1/models", get(v1::models))
         .route("/v1/models/{*id}", get(v1::model))
         .route("/v1/chat/completions", post(v1::chat))
+        // Clients configured with the base URL without `/v1`.
+        .route("/models", get(v1::models))
+        .route("/chat/completions", post(v1::chat))
+        .fallback(not_found)
         .layer(middleware::from_fn_with_state(state.clone(), auth))
         .layer(middleware::from_fn(log_request))
         .layer(CorsLayer::permissive())
@@ -36,6 +40,20 @@ pub fn router(state: Arc<AppState>) -> Router {
 
 async fn ui() -> Html<&'static str> {
     Html(include_str!("../../ui/index.html"))
+}
+
+/// Points misconfigured clients (e.g. a base URL of `.../v1` plus an empty path) to the right route.
+async fn not_found(req: Request) -> Response {
+    error(
+        StatusCode::NOT_FOUND,
+        format!(
+            "no route for {} {}; the chat endpoint is POST /v1/chat/completions and models are GET /v1/models (base URL without a trailing /v1 in most clients)",
+            req.method(),
+            req.uri().path()
+        ),
+        "invalid_request_error",
+        Some("not_found"),
+    )
 }
 
 pub fn error(status: StatusCode, message: impl Into<String>, kind: &'static str, code: Option<&'static str>) -> Response {
