@@ -9,6 +9,7 @@ mod logging;
 mod openai;
 mod providers;
 mod server;
+mod tools;
 #[cfg(windows)]
 mod tray;
 

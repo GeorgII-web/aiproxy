@@ -11,6 +11,8 @@ pub struct ChatRequest {
     pub messages: Vec<Message>,
     #[serde(default)]
     pub stream: bool,
+    #[serde(default)]
+    pub tools: Vec<ToolDef>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -18,6 +20,75 @@ pub struct Message {
     pub role: String,
     #[serde(default)]
     pub content: Content,
+    /// Earlier tool calls of the assistant (chat completions history).
+    #[serde(default)]
+    pub tool_calls: Vec<ToolCallMsg>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ToolCallMsg {
+    #[serde(default)]
+    pub function: FunctionCallMsg,
+}
+
+#[derive(Debug, Default, Deserialize)]
+pub struct FunctionCallMsg {
+    #[serde(default)]
+    pub name: String,
+    #[serde(default)]
+    pub arguments: String,
+}
+
+/// A tool definition in either shape: chat completions (`{type, function: {name, ...}}`) or
+/// Responses (`{type, name, ...}`).
+#[derive(Debug, Deserialize)]
+pub struct ToolDef {
+    #[serde(rename = "type", default)]
+    pub kind: String,
+    #[serde(default)]
+    pub function: Option<ToolSpec>,
+    #[serde(default)]
+    pub name: Option<String>,
+    #[serde(default)]
+    pub description: Option<String>,
+    #[serde(default)]
+    pub parameters: Option<serde_json::Value>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ToolSpec {
+    pub name: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub description: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parameters: Option<serde_json::Value>,
+}
+
+/// Only function tools; others (web search, file search ...) are dropped.
+pub fn tool_specs(defs: &[ToolDef]) -> Vec<ToolSpec> {
+    defs.iter()
+        .filter_map(|d| match (&d.function, &d.name) {
+            (Some(f), _) => Some(f.clone()),
+            (None, Some(name)) if d.kind == "function" || d.kind.is_empty() => Some(ToolSpec {
+                name: name.clone(),
+                description: d.description.clone().unwrap_or_default(),
+                parameters: d.parameters.clone(),
+            }),
+            _ => None,
+        })
+        .collect()
+}
+
+/// A tool call the model asked for; `arguments` is a JSON object as text.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ToolCall {
+    pub id: String,
+    pub name: String,
+    pub arguments: String,
+}
+
+pub fn tool_call_text(name: &str, arguments: &str) -> String {
+    format!("[tool call] {name}({arguments})")
 }
 
 /// `content` is a string or an array of parts; only text parts are used.
@@ -54,7 +125,7 @@ impl Content {
 }
 
 /// What a provider gets: one prompt, plus the system messages separately.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct ChatInput {
     pub prompt: String,
     pub system: Option<String>,
@@ -65,7 +136,13 @@ pub fn build_input(messages: &[Message]) -> ChatInput {
     let mut system = Vec::new();
     let mut turns: Vec<(&str, String)> = Vec::new();
     for m in messages {
-        let text = m.content.text();
+        let mut text = m.content.text();
+        for c in &m.tool_calls {
+            if !text.is_empty() {
+                text.push('\n');
+            }
+            text.push_str(&tool_call_text(&c.function.name, &c.function.arguments));
+        }
         if text.trim().is_empty() {
             continue;
         }
@@ -102,6 +179,8 @@ pub struct ResponsesRequest {
     pub instructions: Option<String>,
     #[serde(default)]
     pub stream: bool,
+    #[serde(default)]
+    pub tools: Vec<ToolDef>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -138,22 +217,23 @@ impl ResponsesRequest {
             messages.push(Message {
                 role: "system".into(),
                 content: Content::Text(i.clone()),
+                tool_calls: Vec::new(),
             });
         }
         match &self.input {
             ResponsesInput::Text(t) => messages.push(Message {
                 role: "user".into(),
                 content: Content::Text(t.clone()),
+                tool_calls: Vec::new(),
             }),
             ResponsesInput::Items(items) => {
                 for it in items {
                     let (role, text) = match it.kind.as_deref() {
                         Some("function_call") => (
                             "assistant",
-                            format!(
-                                "[tool call] {}({})",
+                            tool_call_text(
                                 it.name.as_deref().unwrap_or("?"),
-                                it.arguments.as_deref().unwrap_or("")
+                                it.arguments.as_deref().unwrap_or(""),
                             ),
                         ),
                         Some("function_call_output") => {
@@ -167,6 +247,7 @@ impl ResponsesRequest {
                     messages.push(Message {
                         role: role.into(),
                         content: Content::Text(text),
+                        tool_calls: Vec::new(),
                     });
                 }
             }
@@ -242,7 +323,40 @@ pub struct Choice {
 #[derive(Serialize)]
 pub struct AssistantMessage {
     pub role: &'static str,
-    pub content: String,
+    pub content: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tool_calls: Option<Vec<ToolCallOut>>,
+}
+
+/// Chat completions shape of a tool call (`index` only in stream chunks).
+#[derive(Serialize)]
+pub struct ToolCallOut {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub index: Option<u32>,
+    pub id: String,
+    #[serde(rename = "type")]
+    pub kind: &'static str,
+    pub function: FunctionOut,
+}
+
+#[derive(Serialize)]
+pub struct FunctionOut {
+    pub name: String,
+    pub arguments: String,
+}
+
+impl ToolCallOut {
+    pub fn new(c: &ToolCall, index: Option<u32>) -> Self {
+        Self {
+            index,
+            id: c.id.clone(),
+            kind: "function",
+            function: FunctionOut {
+                name: c.name.clone(),
+                arguments: c.arguments.clone(),
+            },
+        }
+    }
 }
 
 #[derive(Serialize, Default)]
@@ -286,6 +400,8 @@ pub struct Delta {
     pub role: Option<&'static str>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub content: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tool_calls: Option<Vec<ToolCallOut>>,
 }
 
 impl ChatChunk {

@@ -58,6 +58,10 @@ Cookies live in `launchPersistentContext(PROFILE)`: native runtime `<home>/deeps
 | `message` | `.ds-markdown` | rendered answers; the last one is the current answer |
 | `generating` | `[class*="stop" i], button[aria-label*="stop" i]` | present while generating |
 
+Answer text comes from `ANSWER_TEXT` (page-side function): a clone of the answer element where every code block
+(`pre`, or its `[class*="code-block"]` container with the banner "<language> Copy Download") is replaced by a
+```` ```<language> ```` fence, then `innerText` of the clone attached off-screen (`opacity:0`, not
+`visibility:hidden`, which `innerText` skips). A failing extraction is logged once per request (`answer text: …`).
 Loop every 250 ms: new text that extends the sent prefix → `delta`; re-rendered text (prefix broken) is held
 until the end and the remainder after the common prefix is sent. Done when text is stable for 1.5 s (4 s if the
 generating indicator was never seen). Each request navigates to the chat URL first = new conversation.

@@ -89,7 +89,7 @@ Settings page at `/` or `config.toml` directly (see `config.example.toml` for ev
 | `[app]` | `autostart` |
 | `[logging]` | `level` (trace..error, switchable at runtime), `keep_files` |
 | `[[providers]]` | `id`, `kind`, `enabled`, `runtime` (`native`/`wsl`), `wsl_distro`, `command`, `workdir`, `timeout_secs`, `extra_args`; DeepSeek: `url`, `browser`, `profile_dir`, `sidecar_dir` |
-| `[[providers.agents]]` | `name`, `model`, `system_prompt`, `extra_args` |
+| `[[providers.agents]]` | `name`, `model`, `system_prompt`, `extra_args`, `tools` (`ignore`/`emulate`) |
 
 Saving on the settings page applies everything live; a host or port change restarts the
 listener.
@@ -114,7 +114,7 @@ machine. Junie always works inside `workdir` and may edit files there.
 | `GET /v1/models` | all models of all enabled providers |
 | `GET /v1/models/{id}` | one model |
 | `POST /v1/chat/completions` | chat; `"stream": true` for SSE |
-| `POST /v1/responses` | the Responses API: `input` string or items, `instructions`; `"stream": true` for SSE events; tools are not supported |
+| `POST /v1/responses` | the Responses API: `input` string or items, `instructions`; `"stream": true` for SSE events |
 | `GET /health` | `ok` |
 | `GET /api/status`, `GET/PUT /api/settings`, `GET /api/logs?lines=N`, `POST /api/providers/{id}/login` | settings page backend |
 
@@ -128,6 +128,18 @@ Errors use the OpenAI envelope: 404 `model_not_found`, 401 `invalid_api_key`, 40
 JSON or settings, 502 `provider_error` with the CLI's message (missing binary, non-zero exit,
 timeout, DeepSeek not logged in). A client that disconnects mid-stream kills the CLI process.
 
+## Tool calls
+
+The CLIs are agents with their own tools, so a client's `tools` are ignored for them (the CLI
+runs its own commands). A plain chat model like DeepSeek gets tool calling emulated when the
+agent has `tools = "emulate"` (the default for the DeepSeek agent): the client's function tools
+go into the system prompt with a call format, a call in the answer comes back as a real OpenAI
+tool call (`tool_calls` / `finish_reason: "tool_calls"`, or a `function_call` item in the
+Responses API), the client runs the tool and sends the result, and the next request continues
+from there. The proxy never runs tools itself. With emulation the answer is not streamed
+incrementally (it has to be parsed first). If the model breaks the format the text is returned
+as a normal answer.
+
 ## DeepSeek notes
 
 - Login is automatic: the first request without a valid session opens a visible browser
@@ -140,7 +152,8 @@ timeout, DeepSeek not logged in). A client that disconnects mid-stream kills the
 - The sidecar drives the website's DOM, which DeepSeek changes without notice. Selectors are
   at the top of `sidecar/deepseek.mjs` and can be overridden with the environment variable
   `AIPROXY_SELECTORS` (JSON) if the site changes.
-- Streaming reads the rendered answer, so formatting is what the page shows as text.
+- Streaming reads the rendered answer; code blocks are put back into markdown fences with
+  their language, the rest is the page's text.
 - DeepSeek's CDN answers 403 to the `HeadlessChrome` user agent that any headless Chromium
   sends. The sidecar therefore gives headless runs the user agent of the plain Chrome of the
   same version; the visible login browser is left untouched. `browser = "chrome"` or `"msedge"`

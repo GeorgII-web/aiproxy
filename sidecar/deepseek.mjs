@@ -173,6 +173,29 @@ async function ensureSession(forceLogin = false) {
   throw new Error('login timed out');
 }
 
+// Text of a rendered answer with code blocks back in markdown fences (the page renders a code block
+// as a banner "<language> Copy Download" plus <pre>; innerText alone would leak the banner).
+const ANSWER_TEXT = (el) => {
+  const clone = el.cloneNode(true);
+  for (const pre of Array.from(clone.querySelectorAll('pre'))) {
+    const box = pre.closest('[class*="code-block"]') || pre;
+    const code = (pre.querySelector('code') || pre).textContent.replace(/\n$/, '');
+    let lang = '';
+    for (const n of box.querySelectorAll('span, div')) {
+      if (n.children.length || n === pre || pre.contains(n) || n.contains(pre)) continue;
+      const t = n.textContent.trim();
+      if (/^[A-Za-z][\w+#.-]{0,19}$/.test(t) && !/^(copy|copied|download|edit|run)$/i.test(t)) { lang = t; break; }
+    }
+    const node = document.createElement('div');
+    node.style.whiteSpace = 'pre-wrap';
+    node.textContent = '```' + lang + '\n' + code + '\n```';
+    box.replaceWith(node);
+  }
+  clone.style.cssText = 'position:absolute;left:-99999px;top:0;opacity:0;pointer-events:none';
+  document.body.appendChild(clone);
+  try { return clone.innerText; } finally { clone.remove(); }
+};
+
 async function chat(id, prompt, timeoutMs) {
   await ensureSession();
   await goHome(); // a fresh conversation per request
@@ -184,6 +207,7 @@ async function chat(id, prompt, timeoutMs) {
   await input.press('Enter');
 
   cancelled = false;
+  let extractError = false;
   const deadline = Date.now() + timeoutMs;
   let sent = '';
   let started = false;
@@ -196,7 +220,13 @@ async function chat(id, prompt, timeoutMs) {
       return;
     }
     const count = await messages.count();
-    const text = count > before ? (await messages.nth(count - 1).innerText().catch(() => '')).trimEnd() : '';
+    const text = count > before
+      ? (await messages.nth(count - 1).evaluate(ANSWER_TEXT).catch((e) => {
+          if (!extractError) log('warn', `answer text: ${String(e?.message ?? e).split('\n')[0]}`);
+          extractError = true;
+          return '';
+        })).trimEnd()
+      : '';
     const generating = (await page.locator(SEL.generating).count()) > 0;
     generatingSeen ||= generating;
     if (text && text !== sent) {

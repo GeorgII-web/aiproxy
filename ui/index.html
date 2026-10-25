@@ -60,7 +60,7 @@
 
   <section>
     <h2>Providers</h2>
-    <p style="color:var(--muted);margin:0 0 8px">TOML, one <code>[[providers]]</code> per provider, each agent a <code>[[providers.agents]]</code>. Model id = <code>id/agent name</code>. Kinds: <code>claude-cli</code>, <code>junie-cli</code>, <code>deepseek-web</code>.</p>
+    <p style="color:var(--muted);margin:0 0 8px">TOML, one <code>[[providers]]</code> per provider, each agent a <code>[[providers.agents]]</code>. Model id = <code>id/agent name</code>. Kinds: <code>claude-cli</code>, <code>junie-cli</code>, <code>deepseek-web</code>. Agent <code>tools = "emulate"</code> gives a plain chat model (DeepSeek) function calling: the client's tools go into the prompt, calls come back as tool calls, the client runs them.</p>
     <textarea id="providers_toml" spellcheck="false"></textarea>
   </section>
 

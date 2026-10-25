@@ -76,3 +76,4 @@ browser = "chromium"         # chromium | chrome | msedge
 
 [[providers.agents]]
 name = "deepseek"
+tools = "emulate"            # ignore | emulate: function calling via the prompt (the client runs the tools)

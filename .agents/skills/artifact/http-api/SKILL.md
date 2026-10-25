@@ -17,7 +17,7 @@ types in `src/openai.rs`.
 | `GET /v1/models` | `v1::models` | all `Registry::models()` |
 | `GET /v1/models/{*id}` | `v1::model` | wildcard because ids contain `/` |
 | `POST /v1/chat/completions` | `v1::chat` | `stream: true` → SSE |
-| `POST /v1/responses` | `v1::responses` | Responses API (goose uses it for some models): `ResponsesRequest::messages()` turns `instructions` + `input` (string, `message`, `function_call`, `function_call_output` items) into chat messages; non-stream → one `response` object with one `output_text` message; stream → named SSE events `response.created` … `response.output_text.delta` … `response.completed`, `error` + `response.failed` on a provider error. No tools. |
+| `POST /v1/responses` | `v1::responses` | Responses API (goose uses it for some models): `ResponsesRequest::messages()` turns `instructions` + `input` (string, `message`, `function_call`, `function_call_output` items) into chat messages; non-stream → one `response` object with one `output_text` message; stream → named SSE events `response.created` … `response.output_text.delta` … `response.completed`, `error` + `response.failed` on a provider error. With tool emulation also `function_call` output items (`response.function_call_arguments.delta/done`). |
 | `GET /api/status` | `api::status` | version, base_url, paths, autostart, providers with models |
 | `GET/PUT /api/settings` | `api::get_settings` / `put_settings` | `SettingsView` = server, app, logging + `providers_toml` string |
 | `GET /api/logs?lines=N` | `api::logs` | tail of the newest log file, 1..5000 lines |
@@ -34,6 +34,25 @@ Layers (outer to inner): permissive CORS, `log_request` (`method path status ms`
 4. SSE: first chunk `delta.role = assistant`, then content chunks, then `finish_reason: stop`, then `[DONE]`.
    A mid-stream error becomes a `{"error": …}` event followed by `[DONE]`. Keep-alive pings are on.
 5. Non-stream: `usage` is an estimate (chars / 4); the CLIs report nothing.
+6. Both endpoints share `start()` (resolve, first-delta wait) and `collect()`; `Started` carries the deltas plus
+   emulated `tool_calls` and `no_text` (only calls, no assistant text).
+
+## Tool emulation (`src/tools.rs`)
+
+- Trigger: the agent has `tools = "emulate"` (`config::ToolMode`) and the request has function tools
+  (`openai::tool_specs` accepts both shapes: chat `{type, function:{…}}` and Responses `{type, name, …}`).
+- `tools::prompt()` is appended to the system prompt: tool list as JSON and the call format, a ```` ```tool_call ````
+  block with `{"name", "arguments"}` objects, one per line. The answer is collected (no incremental stream),
+  `tools::parse()` splits it into leading text + calls: DeepSeek's `<|DSML|invoke name=".."><|DSML|parameter
+  name=".." string="true">` markup first, else every top-level JSON object with `name` and `arguments` (the
+  DeepSeek page renders fences away, so bare JSON must work); fence lines and the page's code banner
+  (`tool_call`, `Copy`, `Download`) above the block are dropped from the text.
+- Chat completions: `message.content` null when only calls, `tool_calls[]`, `finish_reason: "tool_calls"`;
+  stream: one chunk with `delta.tool_calls` (with `index`) before the finish chunk. Responses: `function_call`
+  items (`id: fc_<call id>`, `call_id`, `name`, `arguments`).
+- History: assistant `tool_calls` and Responses `function_call` items are flattened as `[tool call] name(args)`,
+  tool results as `[tool]` turns, so the model sees the round trip in the next stateless request.
+- The proxy never executes a tool. CLIs keep `ignore` (they run their own tools). Tests in `src/tools.rs`.
 
 ## Errors and auth
 

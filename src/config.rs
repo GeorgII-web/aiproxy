@@ -204,6 +204,25 @@ pub struct AgentConfig {
     /// Arguments appended for this agent only (e.g. `["--agent", "reviewer"]` for Claude Code).
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub extra_args: Vec<String>,
+    /// What to do with the client's `tools`: ignore them, or emulate function calling in the prompt
+    /// (the tool list goes into the system prompt, a tool call in the answer comes back as an OpenAI
+    /// tool call; the client runs the tool). For plain chat models such as DeepSeek.
+    #[serde(skip_serializing_if = "ToolMode::is_ignore")]
+    pub tools: ToolMode,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ToolMode {
+    #[default]
+    Ignore,
+    Emulate,
+}
+
+impl ToolMode {
+    pub fn is_ignore(&self) -> bool {
+        *self == ToolMode::Ignore
+    }
 }
 
 impl Default for Settings {
@@ -269,7 +288,10 @@ fn default_providers() -> Vec<ProviderConfig> {
             kind: ProviderKind::DeepseekWeb,
             timeout_secs: 300,
             url: "https://chat.deepseek.com".into(),
-            agents: vec![agent("deepseek", "")],
+            agents: vec![AgentConfig {
+                tools: ToolMode::Emulate,
+                ..agent("deepseek", "")
+            }],
             ..Default::default()
         },
     ]

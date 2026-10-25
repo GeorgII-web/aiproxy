@@ -34,6 +34,8 @@ Entry point `src/main.rs`; everything else hangs off `AppState` (`src/app.rs`).
 - `Registry::build()` creates one `Provider` per enabled `[[providers]]`: `Cli` (claude-cli, junie-cli) or `Deepseek`.
 - Model id = `<provider id>/<agent name>`. `Registry::resolve()` is the only mapper: bare `<id>` → first agent;
   unknown agent on a CLI provider → pass-through agent with `model = name`; unknown agent on DeepSeek → none.
+- `AgentConfig.tools` (`ignore` | `emulate`) switches function-calling emulation in the HTTP layer
+  (`src/tools.rs`, see `../../artifact/http-api/SKILL.md`); the DeepSeek default agent has `emulate`.
 - A provider returns `DeltaStream` (`Stream<Item = Result<String, ProviderError>>`). Details:
   `../../artifact/cli-providers/SKILL.md`, `../../artifact/deepseek-sidecar/SKILL.md`.
 
