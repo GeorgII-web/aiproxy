@@ -57,6 +57,7 @@ Cookies live in `launchPersistentContext(PROFILE)`: native runtime `<home>/deeps
 | `input` | `textarea#chat-input, textarea` | prompt box; `fill` + `Enter` sends |
 | `message` | `.ds-markdown` | rendered answers; the last one is the current answer |
 | `generating` | `[class*="stop" i], button[aria-label*="stop" i]` | present while generating |
+| `send` | `[role="button"][class*="send" i], button[class*="send" i], button[type="submit"]` | fallback when Enter did not send |
 
 Answer text comes from `ANSWER_TEXT` (page-side function): a clone of the answer element where every code block
 (`pre`, or its `[class*="code-block"]` container with the banner "<language> Copy Download") is replaced by a
@@ -64,8 +65,18 @@ Answer text comes from `ANSWER_TEXT` (page-side function): a clone of the answer
 `visibility:hidden`, which `innerText` skips). A failing extraction is logged once per request (`answer text: …`).
 Loop every 250 ms: new text that extends the sent prefix → `delta`; re-rendered text (prefix broken) is held
 until the end and the remainder after the common prefix is sent. Done when text is stable for 1.5 s (4 s if the
-generating indicator was never seen). Each request navigates to the chat URL first = new conversation.
+generating indicator was never seen). Each request navigates to the chat URL first = new conversation
+(`goHome` waits up to 8 s until no answer element of the old one is left, so `before` starts at 0).
 `cancel` (client disconnected) clicks the stop control and ends the request.
+
+Robustness (`chat` → up to 3 `attempt_` calls within the request timeout):
+
+- Send check: after `fill` + Enter the input must empty (or an answer/generating indicator appear) within 3 s;
+  otherwise Enter again, the third time the `send` button. Still nothing → error `prompt was not sent`.
+- Stall: the site sometimes creates the conversation and never answers. No text and no generating indicator
+  for `STALL_MS` (30 s, env `AIPROXY_STALL_MS`) → `no answer: …` warn with url/counts, new conversation, resend.
+- Stuck: text unchanged for `STUCK_MS` (90 s, env `AIPROXY_STUCK_MS`) → stop control clicked; partial text already
+  sent → `done`, nothing sent → resend. Every 30 s without an end a `still waiting …` warn shows the state.
 
 ## WSL runtime
 

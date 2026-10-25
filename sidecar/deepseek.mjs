@@ -35,6 +35,7 @@ const SEL = Object.assign(
     message: '.ds-markdown',
     // Present while an answer is being generated.
     generating: '[class*="stop" i], button[aria-label*="stop" i]',
+    send: '[role="button"][class*="send" i], button[class*="send" i], button[type="submit"]',
   },
   JSON.parse(process.env.AIPROXY_SELECTORS || '{}'),
 );
@@ -124,6 +125,9 @@ async function launch(hl) {
 async function goHome() {
   await page.goto(CHAT_URL, { waitUntil: 'domcontentloaded' });
   await sleep(1500);
+  // A new conversation has no answers; wait for the app to settle so the message count starts at 0.
+  const until = Date.now() + 8000;
+  while (Date.now() < until && (await page.locator(SEL.message).count()) > 0) await sleep(250);
 }
 
 async function loggedIn() {
@@ -196,28 +200,63 @@ const ANSWER_TEXT = (el) => {
   try { return clone.innerText; } finally { clone.remove(); }
 };
 
+// The site sometimes accepts a prompt (conversation created, input emptied) and never answers.
+// After STALL_MS without any answer text the prompt is sent again in a new conversation.
+const STALL_MS = Number(process.env.AIPROXY_STALL_MS) || 30000;
+// An answer whose text has not changed for STUCK_MS while the page still "generates" is cut off.
+const STUCK_MS = Number(process.env.AIPROXY_STUCK_MS) || 90000;
+
 async function chat(id, prompt, timeoutMs) {
   await ensureSession();
+  const deadline = Date.now() + timeoutMs;
+  for (let attempt = 1; ; attempt++) {
+    const result = await attempt_(id, prompt, deadline);
+    if (result !== 'stalled') return;
+    if (attempt >= 3 || Date.now() > deadline - STALL_MS) throw new Error(`no answer from the page (${attempt} attempts)`);
+    log('warn', `no answer started after ${STALL_MS / 1000} s, sending again in a new conversation (attempt ${attempt + 1})`);
+  }
+}
+
+async function attempt_(id, prompt, deadline) {
   await goHome(); // a fresh conversation per request
   const input = page.locator(SEL.input).first();
   await input.waitFor({ state: 'visible', timeout: 30000 });
   const messages = page.locator(SEL.message);
   const before = await messages.count();
   await input.fill(prompt);
-  await input.press('Enter');
+  // Enter right after navigating to a new chat can be lost (handlers not attached yet):
+  // make sure the prompt left the input, else press again, then try the send button.
+  let sentOk = false;
+  for (let i = 0; i < 3 && !sentOk; i++) {
+    if (i) {
+      log('warn', `prompt not sent, attempt ${i + 1}`);
+      await input.focus().catch(() => {});
+      if (i === 2) await page.locator(SEL.send).first().click({ timeout: 1000 }).catch(() => {});
+    }
+    await input.press('Enter');
+    const until = Date.now() + 3000;
+    while (Date.now() < until && !sentOk) {
+      await sleep(200);
+      const typed = await input.inputValue().catch(() => prompt);
+      sentOk = typed.trim() === '' || (await messages.count()) > before || (await page.locator(SEL.generating).count()) > 0;
+    }
+  }
+  if (!sentOk) throw new Error('prompt was not sent (page not ready?)');
 
   cancelled = false;
   let extractError = false;
-  const deadline = Date.now() + timeoutMs;
+  const t0 = Date.now();
   let sent = '';
+  let seen = '';
   let started = false;
   let generatingSeen = false;
   let lastChange = Date.now();
+  let lastReport = Date.now();
   while (Date.now() < deadline) {
     if (cancelled) {
       await page.locator(SEL.generating).first().click({ timeout: 1000 }).catch(() => {});
       log('info', 'chat cancelled');
-      return;
+      return 'cancelled';
     }
     const count = await messages.count();
     const text = count > before
@@ -229,14 +268,31 @@ async function chat(id, prompt, timeoutMs) {
       : '';
     const generating = (await page.locator(SEL.generating).count()) > 0;
     generatingSeen ||= generating;
-    if (text && text !== sent) {
+    if (!started && !generating && Date.now() - t0 > STALL_MS) {
+      const typed = await input.inputValue().catch(() => '?');
+      log('warn', `no answer: url=${page.url()} messages=${count}/${before} input_chars=${typed.length}`);
+      return 'stalled';
+    }
+    if (Date.now() - lastReport > 30000) {
+      lastReport = Date.now();
+      log('warn', `still waiting after ${Math.round((Date.now() - t0) / 1000)} s: started=${started} chars=${text.length} sent=${sent.length} generating=${generating} messages=${count}/${before} url=${page.url()}`);
+    }
+    if (Date.now() - lastChange > STUCK_MS) {
+      log('warn', `no change for ${STUCK_MS / 1000} s (generating=${generating}, chars=${sent.length}): ${sent ? 'stopping, returning the partial answer' : 'new conversation'}`);
+      await page.locator(SEL.generating).first().click({ timeout: 1000 }).catch(() => {});
+      return sent ? 'done' : 'stalled';
+    }
+    if (text && text !== seen) {
+      // The change timer follows the page text, not what was sent: a re-rendered beginning
+      // (prefix broken) must still count as stable once it stops changing.
       started = true;
       lastChange = Date.now();
+      seen = text;
       if (text.startsWith(sent)) {
         out({ id, type: 'delta', text: text.slice(sent.length) });
         sent = text;
       }
-      // Otherwise earlier text was re-rendered; wait for the final version.
+      // Otherwise earlier text was re-rendered; the remainder is sent at the end.
     }
     const stableMs = generatingSeen ? 1500 : 4000;
     if (started && !generating && Date.now() - lastChange > stableMs) {
@@ -246,7 +302,7 @@ async function chat(id, prompt, timeoutMs) {
         log('warn', 'answer was re-rendered mid-stream; sending the remainder');
         out({ id, type: 'delta', text: text.slice(i) });
       }
-      return;
+      return 'done';
     }
     await sleep(250);
   }

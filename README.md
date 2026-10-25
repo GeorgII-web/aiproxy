@@ -88,7 +88,7 @@ Settings page at `/` or `config.toml` directly (see `config.example.toml` for ev
 | `[server]` | `host`, `port`, `api_key` (empty = no auth; set one before binding to anything but 127.0.0.1) |
 | `[app]` | `autostart` |
 | `[logging]` | `level` (trace..error, switchable at runtime), `keep_files` |
-| `[[providers]]` | `id`, `kind`, `enabled`, `runtime` (`native`/`wsl`), `wsl_distro`, `command`, `workdir`, `timeout_secs`, `extra_args`; DeepSeek: `url`, `browser`, `profile_dir`, `sidecar_dir` |
+| `[[providers]]` | `id`, `kind`, `enabled`, `runtime` (`native`/`wsl`), `wsl_distro`, `command`, `workdir`, `timeout_secs`, `max_prompt_chars`, `extra_args`; DeepSeek: `url`, `browser`, `profile_dir`, `sidecar_dir` |
 | `[[providers.agents]]` | `name`, `model`, `system_prompt`, `extra_args`, `tools` (`ignore`/`emulate`) |
 
 Saving on the settings page applies everything live; a host or port change restarts the
@@ -128,6 +128,19 @@ Errors use the OpenAI envelope: 404 `model_not_found`, 401 `invalid_api_key`, 40
 JSON or settings, 502 `provider_error` with the CLI's message (missing binary, non-zero exit,
 timeout, DeepSeek not logged in). A client that disconnects mid-stream kills the CLI process.
 
+## Limits
+
+What a provider cannot do is rejected by the proxy with a 400 before anything is sent, so a
+client sees the reason at once instead of a slow failure:
+
+| Check | Error code | Setting |
+|---|---|---|
+| prompt longer than the provider accepts (system + flattened messages, characters) | `context_length_exceeded` | `max_prompt_chars` per provider, 0 = no limit; DeepSeek default 400000 (the site took 500k characters of random text in tests, so this is a safety margin below the model context, not a site limit) |
+| non-text content parts (`image_url`, `input_image`, audio, files) | `unsupported_content` | none: no provider takes them |
+
+Not checked: `tools` on a CLI provider are ignored (the CLI has its own tools), DeepSeek serves
+one request at a time (others wait), and every request is a new stateless conversation.
+
 ## Tool calls
 
 The CLIs are agents with their own tools, so a client's `tools` are ignored for them (the CLI
@@ -158,4 +171,6 @@ as a normal answer.
   sends. The sidecar therefore gives headless runs the user agent of the plain Chrome of the
   same version; the visible login browser is left untouched. `browser = "chrome"` or `"msedge"`
   use an installed browser instead of Playwright's Chromium.
-- Each request is a new conversation on the site; requests are served one at a time.
+- Each request is a new conversation on the site; requests are served one at a time. The site
+  sometimes takes a prompt and never answers; after 30 s without an answer the sidecar sends it
+  again in a new conversation (3 attempts), and an answer that stops changing for 90 s is cut off.

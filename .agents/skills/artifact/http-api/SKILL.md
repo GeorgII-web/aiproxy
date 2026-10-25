@@ -37,6 +37,13 @@ Layers (outer to inner): permissive CORS, `log_request` (`method path status ms`
 6. Both endpoints share `start()` (resolve, first-delta wait) and `collect()`; `Started` carries the deltas plus
    emulated `tool_calls` and `no_text` (only calls, no assistant text).
 
+## Limits (checked in `start()` before the provider is called)
+
+- `Content::unsupported()` → any non-text part (`image_url`, `input_image`, …) → 400 `unsupported_content`.
+- `ProviderConfig.max_prompt_chars` (0 = off; DeepSeek default 400 000) against system + prompt characters → 400
+  `context_length_exceeded` with the count and the limit in the message; `prompt too long` warn in the log.
+- `/api/status` reports `max_prompt_chars` per provider; the settings page shows it under the kind.
+
 ## Tool emulation (`src/tools.rs`)
 
 - Trigger: the agent has `tools = "emulate"` (`config::ToolMode`) and the request has function tools

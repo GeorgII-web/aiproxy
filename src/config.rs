@@ -120,6 +120,10 @@ pub struct ProviderConfig {
     pub kind: ProviderKind,
     pub enabled: bool,
     pub runtime: Runtime,
+    /// Longest prompt (system + flattened messages, characters) accepted; longer requests get a 400
+    /// from the proxy instead of a slow failure at the provider. 0 = no limit.
+    #[serde(skip_serializing_if = "is_zero")]
+    pub max_prompt_chars: usize,
     /// wsl: distribution name (`wsl -l`); empty = the default one.
     #[serde(skip_serializing_if = "String::is_empty")]
     pub wsl_distro: String,
@@ -168,6 +172,7 @@ impl Default for ProviderConfig {
             command: String::new(),
             workdir: String::new(),
             timeout_secs: 600,
+            max_prompt_chars: 0,
             extra_args: Vec::new(),
             url: String::new(),
             profile_dir: String::new(),
@@ -255,6 +260,10 @@ impl Default for LoggingSettings {
     }
 }
 
+fn is_zero(n: &usize) -> bool {
+    *n == 0
+}
+
 fn agent(name: &str, model: &str) -> AgentConfig {
     AgentConfig {
         name: name.into(),
@@ -269,6 +278,7 @@ fn default_providers() -> Vec<ProviderConfig> {
             id: "claude".into(),
             kind: ProviderKind::ClaudeCli,
             timeout_secs: 600,
+            max_prompt_chars: 0,
             agents: vec![
                 agent("sonnet", "sonnet"),
                 agent("opus", "opus"),
@@ -287,6 +297,7 @@ fn default_providers() -> Vec<ProviderConfig> {
             id: "deepseek".into(),
             kind: ProviderKind::DeepseekWeb,
             timeout_secs: 300,
+            max_prompt_chars: 400_000,
             url: "https://chat.deepseek.com".into(),
             agents: vec![AgentConfig {
                 tools: ToolMode::Emulate,

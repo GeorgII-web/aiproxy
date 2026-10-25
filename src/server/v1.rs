@@ -97,8 +97,28 @@ async fn start(
     let Some(resolved) = registry.resolve(model) else {
         return Err(Box::new(not_found(model)));
     };
+    if let Some(kind) = messages.iter().find_map(|m| m.content.unsupported()) {
+        return Err(Box::new(error(
+            StatusCode::BAD_REQUEST,
+            format!("content part type {kind:?} is not supported: the providers take text only"),
+            "invalid_request_error",
+            Some("unsupported_content"),
+        )));
+    }
     let emulate = resolved.agent.tools == ToolMode::Emulate && !tools.is_empty();
     let mut input = build_input(messages);
+    let limit = resolved.provider.cfg().max_prompt_chars;
+    let chars =
+        input.prompt.chars().count() + input.system.as_deref().map_or(0, |s| s.chars().count());
+    if limit > 0 && chars > limit {
+        tracing::warn!(model = %resolved.model_id, chars, limit, "prompt too long");
+        return Err(Box::new(error(
+            StatusCode::BAD_REQUEST,
+            format!("prompt is {chars} characters; provider {:?} accepts up to {limit} (max_prompt_chars in the aiproxy settings)", resolved.provider.cfg().id),
+            "invalid_request_error",
+            Some("context_length_exceeded"),
+        )));
+    }
     if emulate {
         let block = tools::prompt(tools);
         input.system = Some(match input.system {

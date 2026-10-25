@@ -110,6 +110,17 @@ pub struct Part {
 }
 
 impl Content {
+    /// Part types the proxy cannot pass on (images, audio, files).
+    pub fn unsupported(&self) -> Option<&str> {
+        match self {
+            Content::Parts(parts) => parts
+                .iter()
+                .map(|p| p.kind.as_str())
+                .find(|k| !matches!(*k, "text" | "input_text" | "output_text" | "refusal")),
+            _ => None,
+        }
+    }
+
     pub fn text(&self) -> String {
         match self {
             Content::Text(t) => t.clone(),
