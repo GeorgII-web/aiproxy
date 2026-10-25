@@ -41,6 +41,9 @@ Entry point `src/main.rs`; everything else hangs off `AppState` (`src/app.rs`).
 
 ## Runtime: native vs WSL
 
+`Launch::command()` returns `(Command, TempFiles)`: long arguments (`Arg::Long`, prompts) become temp files read
+by a bash wrapper inside WSL, see `../../artifact/cli-providers/SKILL.md`.
+
 `providers::process::Launch` describes a process (program, args, cwd, env, runtime, distro) and only
 `Launch::command()` turns it into a `tokio::process::Command`:
 

@@ -101,7 +101,7 @@ impl Sidecar {
         if !(launch.is_wsl() && p.cfg.profile_dir.is_empty()) {
             launch.env("AIPROXY_PROFILE_DIR", launch.path(&p.profile_dir));
         }
-        let mut cmd = launch.command().await;
+        let (mut cmd, _temp) = launch.command().await?;
         cmd.stdin(std::process::Stdio::piped());
         let mut child = cmd.spawn().map_err(|e| {
             ProviderError(format!(

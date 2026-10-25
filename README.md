@@ -140,6 +140,9 @@ client sees the reason at once instead of a slow failure:
 
 Not checked: `tools` on a CLI provider are ignored (the CLI has its own tools), DeepSeek serves
 one request at a time (others wait), and every request is a new stateless conversation.
+Windows caps a command line at 32767 characters. Junie takes the task as an argument, so in WSL
+the proxy passes prompts through temp files and a `bash` wrapper; a CLI running natively on
+Windows gets a 502 with a clear message when the prompt would not fit.
 
 ## Tool calls
 

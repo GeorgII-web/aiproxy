@@ -96,7 +96,7 @@ impl CliProvider {
 
     /// stdout + stderr of a short run (Junie answers on stderr).
     async fn output(&self, launch: Launch) -> Result<String, ProviderError> {
-        let mut cmd = launch.command().await;
+        let (mut cmd, _temp) = launch.command().await?;
         let id = &self.cfg.id;
         let out = tokio::time::timeout(Duration::from_secs(120), cmd.output())
             .await
@@ -132,7 +132,7 @@ impl CliProvider {
                     cmd.args(["--model", &agent.model]);
                 }
                 if let Some(s) = &system {
-                    cmd.args(["--append-system-prompt", s]);
+                    cmd.arg("--append-system-prompt").long_arg("", s);
                 }
                 cmd.args(&self.cfg.extra_args).args(&agent.extra_args);
                 (cmd, Some(input.prompt.clone()))
@@ -146,10 +146,10 @@ impl CliProvider {
                     cmd.arg(format!("--model={}", agent.model));
                 }
                 if let Some(s) = &system {
-                    cmd.arg(format!("--system-prompt={s}"));
+                    cmd.long_arg("--system-prompt=", s);
                 }
                 cmd.args(&self.cfg.extra_args).args(&agent.extra_args);
-                cmd.arg(format!("--task={}", input.prompt));
+                cmd.long_arg("--task=", &input.prompt);
                 (cmd, None)
             }
         }
@@ -161,7 +161,7 @@ impl CliProvider {
         let flavor = self.flavor;
         let id = self.cfg.id.clone();
         Box::pin(try_stream! {
-            let cmd = launch.command().await;
+            let (cmd, _temp) = launch.command().await?;
             let mut run = process::spawn(cmd, stdin).await?;
             tracing::debug!(provider = %id, program = %run.program, "started");
             let deadline = tokio::time::Instant::from_std(Instant::now() + timeout);

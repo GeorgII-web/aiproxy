@@ -13,10 +13,42 @@ use crate::config::{ProviderConfig, Runtime};
 #[cfg(windows)]
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
+/// Windows limits a command line to 32767 characters; above this the proxy refuses instead of
+/// letting `CreateProcess` fail with "filename or extension is too long".
+const MAX_WINDOWS_CMDLINE: usize = 30_000;
+
+/// An argument: plain, or a long text (a prompt) that must not sit on a Windows command line.
+#[derive(Clone, Debug)]
+pub enum Arg {
+    Plain(String),
+    /// `prefix` + file content, e.g. `--task=` + the prompt. Inside WSL the content goes to a temp
+    /// file read by a `bash -c` wrapper; natively it is passed as one argument.
+    Long {
+        prefix: String,
+        content: String,
+    },
+}
+
+/// Temp files of a launch; removed when the process is done (guard dropped).
+#[derive(Default)]
+pub struct TempFiles(Vec<PathBuf>);
+
+impl Drop for TempFiles {
+    fn drop(&mut self) {
+        for p in &self.0 {
+            let _ = std::fs::remove_file(p);
+        }
+    }
+}
+
+fn shell_quote(s: &str) -> String {
+    format!("'{}'", s.replace('\'', "'\\''"))
+}
+
 /// What to run, independent of where: natively or inside WSL.
 pub struct Launch {
     pub program: String,
-    pub args: Vec<String>,
+    pub args: Vec<Arg>,
     pub cwd: Option<String>,
     pub env: Vec<(String, String)>,
     pub runtime: Runtime,
@@ -44,13 +76,33 @@ impl Launch {
     }
 
     pub fn arg(&mut self, a: impl Into<String>) -> &mut Self {
-        self.args.push(a.into());
+        self.args.push(Arg::Plain(a.into()));
         self
     }
 
     pub fn args<I: IntoIterator<Item = S>, S: Into<String>>(&mut self, items: I) -> &mut Self {
-        self.args.extend(items.into_iter().map(Into::into));
+        self.args
+            .extend(items.into_iter().map(|a| Arg::Plain(a.into())));
         self
+    }
+
+    /// A long text argument (prompt); see [`Arg::Long`].
+    pub fn long_arg(&mut self, prefix: &str, content: &str) -> &mut Self {
+        self.args.push(Arg::Long {
+            prefix: prefix.to_string(),
+            content: content.to_string(),
+        });
+        self
+    }
+
+    fn flat_args(&self) -> Vec<String> {
+        self.args
+            .iter()
+            .map(|a| match a {
+                Arg::Plain(s) => s.clone(),
+                Arg::Long { prefix, content } => format!("{prefix}{content}"),
+            })
+            .collect()
     }
 
     pub fn env(&mut self, k: &str, v: impl Into<String>) -> &mut Self {
@@ -69,15 +121,25 @@ impl Launch {
 
     /// Builds the process. WSL: `wsl.exe [-d distro] [--cd dir] --exec [/usr/bin/env K=V..] program args..`,
     /// a bare program name resolved once through the user's login shell (PATH of `.profile`/`.bashrc`).
-    pub async fn command(&self) -> Command {
+    /// Long arguments inside WSL become temp files read by `/bin/bash -c "exec program args.. --x=\"$(cat f)\""`.
+    pub async fn command(&self) -> Result<(Command, TempFiles), ProviderError> {
         if !self.is_wsl() {
+            let args = self.flat_args();
+            if cfg!(windows) {
+                let len = self.program.len() + args.iter().map(|a| a.len() + 3).sum::<usize>();
+                if len > MAX_WINDOWS_CMDLINE {
+                    return Err(ProviderError(format!(
+                        "the command line for {} would be {len} characters, more than Windows allows (32767): use runtime = \"wsl\" for this provider or a shorter prompt",
+                        self.program
+                    )));
+                }
+            }
             let mut cmd = command(&self.program);
-            cmd.args(&self.args)
-                .envs(self.env.iter().map(|(k, v)| (k, v)));
+            cmd.args(&args).envs(self.env.iter().map(|(k, v)| (k, v)));
             if let Some(d) = &self.cwd {
                 cmd.current_dir(d);
             }
-            return cmd;
+            return Ok((cmd, TempFiles::default()));
         }
         let program = if self.program.contains('/') {
             self.program.clone()
@@ -98,8 +160,36 @@ impl Launch {
             cmd.arg("/usr/bin/env");
             cmd.args(self.env.iter().map(|(k, v)| format!("{k}={v}")));
         }
-        cmd.arg(program).args(&self.args);
-        cmd
+        let mut temp = TempFiles::default();
+        if self.args.iter().all(|a| matches!(a, Arg::Plain(_))) {
+            cmd.arg(program).args(self.flat_args());
+            return Ok((cmd, temp));
+        }
+        let mut script = format!("exec {}", shell_quote(&program));
+        for a in &self.args {
+            match a {
+                Arg::Plain(s) => {
+                    script.push(' ');
+                    script.push_str(&shell_quote(s));
+                }
+                Arg::Long { prefix, content } => {
+                    let file = std::env::temp_dir()
+                        .join(format!("aiproxy-{}.txt", uuid::Uuid::new_v4().simple()));
+                    std::fs::write(&file, content).map_err(|e| {
+                        ProviderError(format!("cannot write {}: {e}", file.display()))
+                    })?;
+                    let wsl_file = to_wsl_path(&file);
+                    temp.0.push(file);
+                    script.push_str(&format!(
+                        " {}\"$(cat {})\"",
+                        shell_quote(prefix),
+                        shell_quote(&wsl_file)
+                    ));
+                }
+            }
+        }
+        cmd.args(["/bin/bash", "-c", &script]);
+        Ok((cmd, temp))
     }
 }
 
@@ -267,5 +357,21 @@ impl Running {
         let s = self.stderr.lock().unwrap();
         let tail: Vec<char> = s.trim().chars().rev().take(500).collect();
         tail.into_iter().rev().collect()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn quoting_and_paths() {
+        assert_eq!(shell_quote("a b"), "'a b'");
+        assert_eq!(shell_quote("it's"), "'it'\\''s'");
+        assert_eq!(
+            to_wsl_path(Path::new("C:\\Users\\x\\f.txt")),
+            "/mnt/c/Users/x/f.txt"
+        );
+        assert_eq!(to_wsl_path(Path::new("/home/x")), "/home/x");
     }
 }

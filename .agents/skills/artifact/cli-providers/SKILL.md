@@ -14,6 +14,10 @@ description: How `src/providers/cli.rs` runs Claude Code (`claude -p --output-fo
 | Claude | `claude -p --output-format stream-json --verbose --include-partial-messages [--model m] [extra_args..]` | stdin | `--append-system-prompt` |
 | Junie | `junie --skip-update-check --output-format=json-stream [--project=workdir] [--model=m] [extra_args..] --task=<prompt>` | argument | `--system-prompt=` |
 
+- Prompts are `Launch::long_arg` (Junie `--task=`, `--system-prompt=`; Claude `--append-system-prompt`): inside
+  WSL they go to temp files and a `/bin/bash -c "exec prog args.. '--task='\"$(cat f)\""` wrapper (Windows caps a
+  command line at 32767 chars, goose prompts exceed it); natively on Windows a too-long line is refused with a
+  clear error before spawning. Temp files are removed when the `TempFiles` guard of the launch drops.
 - `extra_args` of the provider come first, then the agent's. Claude permissions: default mode, tools needing
   approval are denied; `["--dangerously-skip-permissions"]` or `["--permission-mode", "plan"]` via `extra_args`.
   A Claude Code custom agent: agent `extra_args = ["--agent", "<name>"]`.
