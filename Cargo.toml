@@ -1,6 +1,6 @@
 [package]
 name = "aiproxy"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 description = "Tray app: one OpenAI-compatible API in front of local AI agents (Claude CLI, Junie CLI, DeepSeek web)"
 
