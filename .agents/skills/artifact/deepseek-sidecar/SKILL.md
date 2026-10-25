@@ -13,7 +13,7 @@ dropped (killed) on a fatal error, timeout, or registry rebuild.
 
 | Direction | Message |
 |---|---|
-| in | `{"op":"chat","id","prompt","timeout_ms"}`, `{"op":"login","id"}`, `{"op":"cancel","id"}` |
+| in | `{"op":"chat","id","prompt","files":[paths],"timeout_ms"}`, `{"op":"login","id"}`, `{"op":"cancel","id"}` |
 | out | `{"type":"ready"}`, `{"id","type":"delta","text"}`, `{"id","type":"done"}`, `{"id","type":"error","message"}`, `{"type":"log","level","message"}` |
 
 `Sidecar::next()` forwards `log` lines to tracing (target `deepseek`) and returns the rest; messages with a
@@ -58,6 +58,9 @@ Cookies live in `launchPersistentContext(PROFILE)`: native runtime `<home>/deeps
 | `message` | `.ds-markdown` | rendered answers; the last one is the current answer |
 | `generating` | `[class*="stop" i], button[aria-label*="stop" i]` | present while generating |
 | `send` | `[role="button"][class*="send" i], button[class*="send" i], button[type="submit"]` | fallback when Enter did not send |
+| `file` | `input[type="file"]` | image upload input (`setInputFiles`) |
+| `attach` | `[class*="upload" i], [class*="attach" i], [aria-label*="upload" i], …` | button opening the file chooser when there is no file input |
+| `uploading` | `[class*="uploading" i], [class*="progress" i], [role="progressbar"]` | upload in progress; waited for up to `UPLOAD_MS` (60 s, env `AIPROXY_UPLOAD_MS`) |
 
 Answer text comes from `ANSWER_TEXT` (page-side function): a clone of the answer element where every code block
 (`pre`, or its `[class*="code-block"]` container with the banner "<language> Copy Download") is replaced by a
@@ -68,6 +71,11 @@ until the end and the remainder after the common prefix is sent. Done when text 
 generating indicator was never seen). Each request navigates to the chat URL first = new conversation
 (`goHome` waits up to 8 s until no answer element of the old one is left, so `before` starts at 0).
 `cancel` (client disconnected) clicks the stop control and ends the request.
+
+Images: `files` are image temp files written by `deepseek.rs` (paths inside the sidecar's runtime, removed after
+the request); `attach()` sets them on the file input (or the file chooser of the `attach` button) before the
+prompt is filled and waits until nothing `uploading` is left. The site extracts text from images (OCR). Unverified
+against the live site so far (no logged-in session when it was written): check the selectors first if it fails.
 
 Robustness (`chat` → up to 3 `attempt_` calls within the request timeout):
 

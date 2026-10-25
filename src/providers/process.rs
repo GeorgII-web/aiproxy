@@ -53,6 +53,8 @@ pub struct Launch {
     pub env: Vec<(String, String)>,
     pub runtime: Runtime,
     pub distro: String,
+    /// Files written for this run (images), removed with the [`TempFiles`] of [`Launch::command`].
+    temp: Vec<PathBuf>,
 }
 
 impl Launch {
@@ -68,7 +70,28 @@ impl Launch {
                 Runtime::Native
             },
             distro: cfg.wsl_distro.clone(),
+            temp: Vec::new(),
         }
+    }
+
+    /// Writes a temp file for the process and returns its path inside the runtime.
+    pub fn temp_file(&mut self, ext: &str, bytes: &[u8]) -> Result<String, ProviderError> {
+        let file = temp_path(ext);
+        std::fs::write(&file, bytes)
+            .map_err(|e| ProviderError(format!("cannot write {}: {e}", file.display())))?;
+        let inside = self.path(&file);
+        self.temp.push(file);
+        Ok(inside)
+    }
+
+    /// Takes the temp files written so far (for a launch whose process outlives `command`).
+    pub fn temp_files(&mut self) -> TempFiles {
+        TempFiles(std::mem::take(&mut self.temp))
+    }
+
+    /// The temp directory inside the runtime (for `--add-dir`).
+    pub fn temp_dir(&self) -> String {
+        self.path(&std::env::temp_dir())
     }
 
     pub fn is_wsl(&self) -> bool {
@@ -139,7 +162,7 @@ impl Launch {
             if let Some(d) = &self.cwd {
                 cmd.current_dir(d);
             }
-            return Ok((cmd, TempFiles::default()));
+            return Ok((cmd, TempFiles(self.temp.clone())));
         }
         let program = if self.program.contains('/') {
             self.program.clone()
@@ -160,7 +183,7 @@ impl Launch {
             cmd.arg("/usr/bin/env");
             cmd.args(self.env.iter().map(|(k, v)| format!("{k}={v}")));
         }
-        let mut temp = TempFiles::default();
+        let mut temp = TempFiles(self.temp.clone());
         if self.args.iter().all(|a| matches!(a, Arg::Plain(_))) {
             cmd.arg(program).args(self.flat_args());
             return Ok((cmd, temp));
@@ -173,8 +196,7 @@ impl Launch {
                     script.push_str(&shell_quote(s));
                 }
                 Arg::Long { prefix, content } => {
-                    let file = std::env::temp_dir()
-                        .join(format!("aiproxy-{}.txt", uuid::Uuid::new_v4().simple()));
+                    let file = temp_path("txt");
                     std::fs::write(&file, content).map_err(|e| {
                         ProviderError(format!("cannot write {}: {e}", file.display()))
                     })?;
@@ -191,6 +213,10 @@ impl Launch {
         cmd.args(["/bin/bash", "-c", &script]);
         Ok((cmd, temp))
     }
+}
+
+fn temp_path(ext: &str) -> PathBuf {
+    std::env::temp_dir().join(format!("aiproxy-{}.{ext}", uuid::Uuid::new_v4().simple()))
 }
 
 /// `C:\a\b` → `/mnt/c/a/b`; Linux paths pass through.

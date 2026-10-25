@@ -64,7 +64,7 @@ Settings page at `/` or `config.toml` directly (see `config.example.toml` for ev
 | `[server]` | `host`, `port`, `api_key` (empty = no auth; set one before binding to anything but 127.0.0.1) |
 | `[app]` | `autostart` |
 | `[logging]` | `level` (trace..error, switchable at runtime), `keep_files` |
-| `[[providers]]` | `id`, `kind`, `enabled`, `runtime` (`native`/`wsl`), `wsl_distro`, `command`, `workdir`, `timeout_secs`, `max_prompt_chars`, `discover_models`, `extra_args`; DeepSeek: `url`, `browser`, `profile_dir`, `sidecar_dir`, `auth_file` |
+| `[[providers]]` | `id`, `kind`, `enabled`, `runtime` (`native`/`wsl`), `wsl_distro`, `command`, `workdir`, `timeout_secs`, `max_prompt_chars`, `images`, `discover_models`, `extra_args`; DeepSeek: `url`, `browser`, `profile_dir`, `sidecar_dir`, `auth_file` |
 | `[[providers.agents]]` | `name`, `model`, `system_prompt`, `extra_args`, `tools` (`ignore`/`emulate`) |
 
 Saving on the settings page applies everything live; a host or port change restarts the
@@ -117,12 +117,21 @@ client sees the reason at once instead of a slow failure:
 | Check | Error code | Setting |
 |---|---|---|
 | prompt longer than the provider accepts (system + flattened messages, characters) | `context_length_exceeded` | `max_prompt_chars` per provider, 0 = no limit; DeepSeek default 400000 (the site took 500k characters of random text in tests, so this is a safety margin below the model context, not a site limit) |
-| non-text content parts (`image_url`, `input_image`, audio, files) | `unsupported_content` | none: no provider takes them |
+| images with `images = false` on the provider, an image that is not a base64 `data:` URL, or audio and file parts | `unsupported_content` | `images` per provider, default true |
 
 Not checked: `tools` on a CLI provider are ignored (the CLI has its own tools), DeepSeek serves
 one request at a time (others wait), and every request is a new stateless conversation. A CLI
 running natively on Windows gets a 502 with a clear message when the prompt would not fit the
 command line (see CLIs inside WSL).
+
+## Images
+
+Image parts (`image_url` in chat completions, `input_image` in the Responses API, base64 `data:` URLs
+as clients send them) are accepted. The CLIs get each image as a temp file and a note in the system
+prompt mapping `[image N]` in the prompt to the file; Claude Code and Junie open the file themselves
+(Claude gets the temp folder through `--add-dir`). DeepSeek gets the files uploaded to the chat before
+the prompt is sent; the site extracts text from images, it does not see them. `images = false` on a
+provider turns this into a 400.
 
 ## Tool calls
 

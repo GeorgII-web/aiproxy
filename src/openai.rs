@@ -91,8 +91,8 @@ pub fn tool_call_text(name: &str, arguments: &str) -> String {
     format!("[tool call] {name}({arguments})")
 }
 
-/// `content` is a string or an array of parts; only text parts are used.
-#[derive(Debug, Default, Deserialize)]
+/// `content` is a string or an array of parts (text and images).
+#[derive(Debug, Default, Clone, Deserialize)]
 #[serde(untagged)]
 pub enum Content {
     Text(String),
@@ -101,23 +101,93 @@ pub enum Content {
     Empty,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct Part {
     #[serde(rename = "type")]
     pub kind: String,
     #[serde(default)]
     pub text: String,
+    /// `image_url` part: `{"url": "data:..."}` (chat completions) or the URL itself (Responses `input_image`).
+    #[serde(default)]
+    pub image_url: Option<ImageUrl>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(untagged)]
+pub enum ImageUrl {
+    Url(String),
+    Object { url: String },
+}
+
+impl ImageUrl {
+    pub fn url(&self) -> &str {
+        match self {
+            ImageUrl::Url(u) | ImageUrl::Object { url: u } => u,
+        }
+    }
+}
+
+/// An image attached to a message, decoded from its `data:` URL.
+#[derive(Debug, Clone)]
+pub struct Image {
+    /// `png`, `jpeg`, `gif`, `webp`.
+    pub format: String,
+    pub bytes: Vec<u8>,
+}
+
+impl Image {
+    /// `data:image/png;base64,...` → the bytes; anything else is unsupported.
+    pub fn from_data_url(url: &str) -> Result<Self, String> {
+        use base64::Engine;
+        let Some(rest) = url.strip_prefix("data:image/") else {
+            return Err("only data: URLs with a base64 image are supported".into());
+        };
+        let (format, data) = rest
+            .split_once(";base64,")
+            .ok_or("only data: URLs with a base64 image are supported")?;
+        let format = match format {
+            "jpg" => "jpeg",
+            f => f,
+        };
+        if !matches!(format, "png" | "jpeg" | "gif" | "webp") {
+            return Err(format!("image format {format:?} is not supported"));
+        }
+        let bytes = base64::engine::general_purpose::STANDARD
+            .decode(data.trim())
+            .map_err(|e| format!("invalid base64 image: {e}"))?;
+        Ok(Self {
+            format: format.into(),
+            bytes,
+        })
+    }
 }
 
 impl Content {
-    /// Part types the proxy cannot pass on (images, audio, files).
+    /// Part types the proxy cannot pass on (audio, files).
     pub fn unsupported(&self) -> Option<&str> {
+        match self {
+            Content::Parts(parts) => parts.iter().map(|p| p.kind.as_str()).find(|k| {
+                !matches!(
+                    *k,
+                    "text" | "input_text" | "output_text" | "refusal" | "image_url" | "input_image"
+                )
+            }),
+            _ => None,
+        }
+    }
+
+    /// The images of the message, in order.
+    pub fn images(&self) -> Result<Vec<Image>, String> {
         match self {
             Content::Parts(parts) => parts
                 .iter()
-                .map(|p| p.kind.as_str())
-                .find(|k| !matches!(*k, "text" | "input_text" | "output_text" | "refusal")),
-            _ => None,
+                .filter(|p| matches!(p.kind.as_str(), "image_url" | "input_image"))
+                .map(|p| match &p.image_url {
+                    Some(u) => Image::from_data_url(u.url()),
+                    None => Err("image part without image_url".into()),
+                })
+                .collect(),
+            _ => Ok(Vec::new()),
         }
     }
 
@@ -135,19 +205,34 @@ impl Content {
     }
 }
 
-/// What a provider gets: one prompt, plus the system messages separately.
+/// What a provider gets: one prompt, the system messages separately, and the attached images
+/// (referenced in the prompt as `[image N]`, 1-based, in order).
 #[derive(Debug, Clone, Default)]
 pub struct ChatInput {
     pub prompt: String,
     pub system: Option<String>,
+    pub images: Vec<Image>,
 }
 
 /// A lone user message is passed as is; a conversation is flattened with `[role]` headers.
-pub fn build_input(messages: &[Message]) -> ChatInput {
+/// Images that do not decode are reported by their message's number and reason.
+pub fn build_input(messages: &[Message]) -> Result<ChatInput, String> {
     let mut system = Vec::new();
     let mut turns: Vec<(&str, String)> = Vec::new();
-    for m in messages {
+    let mut images = Vec::new();
+    for (i, m) in messages.iter().enumerate() {
         let mut text = m.content.text();
+        for img in m
+            .content
+            .images()
+            .map_err(|e| format!("message {i}: {e}"))?
+        {
+            images.push(img);
+            if !text.is_empty() {
+                text.push('\n');
+            }
+            text.push_str(&format!("[image {}]", images.len()));
+        }
         for c in &m.tool_calls {
             if !text.is_empty() {
                 text.push('\n');
@@ -174,10 +259,11 @@ pub fn build_input(messages: &[Message]) -> ChatInput {
             s
         }
     };
-    ChatInput {
+    Ok(ChatInput {
         prompt,
         system: (!system.is_empty()).then(|| system.join("\n\n")),
-    }
+        images,
+    })
 }
 
 /// `POST /v1/responses` (OpenAI Responses API): `input` is a string or a list of items.
@@ -251,7 +337,12 @@ impl ResponsesRequest {
                             ("tool", it.output.clone().unwrap_or_default())
                         }
                         None | Some("message") => {
-                            (it.role.as_deref().unwrap_or("user"), it.content.text())
+                            messages.push(Message {
+                                role: it.role.clone().unwrap_or_else(|| "user".into()),
+                                content: it.content.clone(),
+                                tool_calls: Vec::new(),
+                            });
+                            continue;
                         }
                         _ => continue,
                     };
@@ -449,4 +540,25 @@ pub struct ApiError {
     pub kind: &'static str,
     pub param: Option<String>,
     pub code: Option<&'static str>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn images_in_messages() {
+        let json = r#"[{"role":"user","content":[{"type":"text","text":"what is this"},
+            {"type":"image_url","image_url":{"url":"data:image/png;base64,aGk="}},
+            {"type":"input_image","image_url":"data:image/jpg;base64,aGk="}]}]"#;
+        let messages: Vec<Message> = serde_json::from_str(json).unwrap();
+        assert_eq!(messages[0].content.unsupported(), None);
+        let input = build_input(&messages).unwrap();
+        assert_eq!(input.prompt, "what is this\n[image 1]\n[image 2]");
+        assert_eq!(input.images.len(), 2);
+        assert_eq!(input.images[1].format, "jpeg");
+        assert_eq!(input.images[0].bytes, b"hi");
+        assert!(Image::from_data_url("https://x/y.png").is_err());
+        assert!(Image::from_data_url("data:image/bmp;base64,aGk=").is_err());
+    }
 }

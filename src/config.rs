@@ -124,6 +124,9 @@ pub struct ProviderConfig {
     /// from the proxy instead of a slow failure at the provider. 0 = no limit.
     #[serde(skip_serializing_if = "is_zero")]
     pub max_prompt_chars: usize,
+    /// Accept images in messages: CLIs get them as files to read, DeepSeek uploads them.
+    /// false = a 400 from the proxy instead.
+    pub images: bool,
     /// wsl: distribution name (`wsl -l`); empty = the default one.
     #[serde(skip_serializing_if = "String::is_empty")]
     pub wsl_distro: String,
@@ -173,6 +176,7 @@ impl Default for ProviderConfig {
             workdir: String::new(),
             timeout_secs: 600,
             max_prompt_chars: 0,
+            images: true,
             extra_args: Vec::new(),
             url: String::new(),
             profile_dir: String::new(),

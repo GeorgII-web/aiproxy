@@ -109,11 +109,32 @@ impl CliProvider {
         text.push_str(&String::from_utf8_lossy(&out.stderr));
         Ok(text)
     }
-    fn build(&self, agent: &AgentConfig, input: &ChatInput) -> (Launch, Option<String>) {
+    /// Images go to temp files the CLI reads itself; the system prompt maps `[image N]` to them.
+    fn build(
+        &self,
+        agent: &AgentConfig,
+        input: &ChatInput,
+    ) -> Result<(Launch, Option<String>), ProviderError> {
         let mut cmd = Launch::new(&self.cfg);
+        let mut files = Vec::new();
+        for img in &input.images {
+            files.push(cmd.temp_file(&img.format, &img.bytes)?);
+        }
+        let images = (!files.is_empty()).then(|| {
+            let list: Vec<String> = files
+                .iter()
+                .enumerate()
+                .map(|(i, f)| format!("[image {}] = {f}", i + 1))
+                .collect();
+            format!(
+                "# Attached images\n\nThe prompt refers to images by number; each is a file. Read the file to see the image:\n{}",
+                list.join("\n")
+            )
+        });
         let system: Vec<&str> = [
             agent.system_prompt.as_str(),
             input.system.as_deref().unwrap_or(""),
+            images.as_deref().unwrap_or(""),
         ]
         .into_iter()
         .filter(|s| !s.trim().is_empty())
@@ -128,6 +149,10 @@ impl CliProvider {
                     "--verbose",
                     "--include-partial-messages",
                 ]);
+                if !files.is_empty() {
+                    let dir = cmd.temp_dir();
+                    cmd.args(["--add-dir", &dir]);
+                }
                 if !agent.model.is_empty() {
                     cmd.args(["--model", &agent.model]);
                 }
@@ -135,7 +160,7 @@ impl CliProvider {
                     cmd.arg("--append-system-prompt").long_arg("", s);
                 }
                 cmd.args(&self.cfg.extra_args).args(&agent.extra_args);
-                (cmd, Some(input.prompt.clone()))
+                Ok((cmd, Some(input.prompt.clone())))
             }
             Flavor::Junie => {
                 cmd.args(["--skip-update-check", "--output-format=json-stream"]);
@@ -150,17 +175,18 @@ impl CliProvider {
                 }
                 cmd.args(&self.cfg.extra_args).args(&agent.extra_args);
                 cmd.long_arg("--task=", &input.prompt);
-                (cmd, None)
+                Ok((cmd, None))
             }
         }
     }
 
     pub fn chat(&self, agent: &AgentConfig, input: ChatInput) -> DeltaStream {
-        let (launch, stdin) = self.build(agent, &input);
+        let built = self.build(agent, &input);
         let timeout = Duration::from_secs(self.cfg.timeout_secs.max(1));
         let flavor = self.flavor;
         let id = self.cfg.id.clone();
         Box::pin(try_stream! {
+            let (launch, stdin) = built?;
             let (cmd, _temp) = launch.command().await?;
             let mut run = process::spawn(cmd, stdin).await?;
             tracing::debug!(provider = %id, program = %run.program, "started");

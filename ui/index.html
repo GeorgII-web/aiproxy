@@ -100,7 +100,7 @@ async function loadStatus() {
   $('base').innerHTML = `<code>${s.base_url}/v1</code>`;
   $('cfgpath').textContent = s.config_file; $('logpath').textContent = s.logs_dir;
   $('providers').querySelector('tbody').innerHTML = s.providers.map(p =>
-    `<tr style="${p.enabled ? '' : 'opacity:.5'}"><td>${p.id}<br><code>${p.command}</code></td><td>${p.kind}<br>${p.runtime}${p.max_prompt_chars ? `<br><span style="color:var(--muted)">≤ ${p.max_prompt_chars.toLocaleString()} chars</span>` : ''}</td>
+    `<tr style="${p.enabled ? '' : 'opacity:.5'}"><td>${p.id}<br><code>${p.command}</code></td><td>${p.kind}<br>${p.runtime}${p.max_prompt_chars ? `<br><span style="color:var(--muted)">≤ ${p.max_prompt_chars.toLocaleString()} chars</span>` : ''}${p.images === false ? '<br><span style="color:var(--muted)">text only</span>' : ''}</td>
      <td>${p.models.map(m => `<code>${m}</code>`).join(' ') || '—'}${p.discovered.length ? '<br>' + p.discovered.map(m => `<code style="opacity:.75">${m}</code>`).join(' ') : ''}</td>
      <td>${p.kind === 'deepseek-web' && p.enabled ? `<button class="secondary login" data-id="${p.id}">Log in / re-login</button>` : ''}${p.kind !== 'deepseek-web' && p.enabled && p.discover ? `<button class="secondary discover" data-id="${p.id}">Refresh models</button>` : ''}</td></tr>`).join('');
   $('models_csv').value = s.providers.filter(p => p.enabled).flatMap(p => [...p.models, ...p.discovered]).join(',');

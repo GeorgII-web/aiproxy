@@ -33,7 +33,7 @@ pub async fn status(State(state): State<Arc<AppState>>) -> Json<serde_json::Valu
                 })
                 .unwrap_or_default();
             json!({ "id": c.id, "kind": c.kind, "enabled": c.enabled, "runtime": c.runtime, "command": c.command(),
-                    "discover": c.discover_models, "max_prompt_chars": c.max_prompt_chars,
+                    "discover": c.discover_models, "max_prompt_chars": c.max_prompt_chars, "images": c.images,
                     "models": agents, "discovered": discovered })
         })
         .collect();

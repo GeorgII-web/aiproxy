@@ -100,13 +100,34 @@ async fn start(
     if let Some(kind) = messages.iter().find_map(|m| m.content.unsupported()) {
         return Err(Box::new(error(
             StatusCode::BAD_REQUEST,
-            format!("content part type {kind:?} is not supported: the providers take text only"),
+            format!("content part type {kind:?} is not supported: text and images only"),
             "invalid_request_error",
             Some("unsupported_content"),
         )));
     }
     let emulate = resolved.agent.tools == ToolMode::Emulate && !tools.is_empty();
-    let mut input = build_input(messages);
+    let mut input = match build_input(messages) {
+        Ok(i) => i,
+        Err(e) => {
+            return Err(Box::new(error(
+                StatusCode::BAD_REQUEST,
+                e,
+                "invalid_request_error",
+                Some("unsupported_content"),
+            )))
+        }
+    };
+    if !input.images.is_empty() && !resolved.provider.cfg().images {
+        return Err(Box::new(error(
+            StatusCode::BAD_REQUEST,
+            format!(
+                "provider {:?} takes text only (images = false in the aiproxy settings)",
+                resolved.provider.cfg().id
+            ),
+            "invalid_request_error",
+            Some("unsupported_content"),
+        )));
+    }
     let limit = resolved.provider.cfg().max_prompt_chars;
     let chars =
         input.prompt.chars().count() + input.system.as_deref().map_or(0, |s| s.chars().count());
@@ -126,7 +147,7 @@ async fn start(
             None => block,
         });
     }
-    tracing::info!(model = %resolved.model_id, prompt_chars = input.prompt.len(), stream, tools = tools.len(), emulate, "chat");
+    tracing::info!(model = %resolved.model_id, prompt_chars = input.prompt.len(), images = input.images.len(), stream, tools = tools.len(), emulate, "chat");
     let prompt = input.prompt.clone();
     let model = resolved.model_id.clone();
     let mut deltas = resolved.chat(input);

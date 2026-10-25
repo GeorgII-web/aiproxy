@@ -8,6 +8,7 @@ description = "Tray app: one OpenAI-compatible API in front of local AI agents (
 anyhow = "1"
 async-stream = "0.3"
 auto-launch = "0.5"
+base64 = "0.22"
 axum = { version = "0.8", features = ["json"] }
 directories = "6"
 futures = "0.3"

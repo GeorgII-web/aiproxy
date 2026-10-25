@@ -210,7 +210,22 @@ impl DeepseekProvider {
             None => input.prompt,
         };
         let timeout = Duration::from_secs(self.cfg.timeout_secs.max(1));
+        // Images become temp files the sidecar uploads; the paths are those inside its runtime.
+        let mut launch = Launch::new(&self.cfg);
+        let files: Result<Vec<String>, ProviderError> = input
+            .images
+            .iter()
+            .map(|img| launch.temp_file(&img.format, &img.bytes))
+            .collect();
+        let temp = launch.temp_files();
         tokio::spawn(async move {
+            let files = match files {
+                Ok(f) => f,
+                Err(e) => {
+                    let _ = tx.send(Err(e)).await;
+                    return;
+                }
+            };
             let mut guard = match this.acquire().await {
                 Ok(g) => g,
                 Err(e) => {
@@ -219,8 +234,9 @@ impl DeepseekProvider {
                 }
             };
             let id = uuid::Uuid::new_v4().simple().to_string();
-            let request = json!({ "op": "chat", "id": id, "prompt": prompt, "timeout_ms": timeout.as_millis() as u64 });
+            let request = json!({ "op": "chat", "id": id, "prompt": prompt, "files": files, "timeout_ms": timeout.as_millis() as u64 });
             let outcome = run(guard.as_mut().expect("started"), request, &id, timeout, &tx).await;
+            drop(temp);
             if let Err(e) = outcome {
                 tracing::warn!("{e}; restarting sidecar on next request");
                 *guard = None;

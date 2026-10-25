@@ -36,6 +36,11 @@ const SEL = Object.assign(
     // Present while an answer is being generated.
     generating: '[class*="stop" i], button[aria-label*="stop" i]',
     send: '[role="button"][class*="send" i], button[class*="send" i], button[type="submit"]',
+    // Image upload: the file input, or a button that opens the file chooser.
+    file: 'input[type="file"]',
+    attach: '[class*="upload" i], [class*="attach" i], [aria-label*="upload" i], [aria-label*="attach" i]',
+    // Present while an upload is in progress.
+    uploading: '[class*="uploading" i], [class*="progress" i], [role="progressbar"]',
   },
   JSON.parse(process.env.AIPROXY_SELECTORS || '{}'),
 );
@@ -206,23 +211,46 @@ const STALL_MS = Number(process.env.AIPROXY_STALL_MS) || 30000;
 // An answer whose text has not changed for STUCK_MS while the page still "generates" is cut off.
 const STUCK_MS = Number(process.env.AIPROXY_STUCK_MS) || 90000;
 
-async function chat(id, prompt, timeoutMs) {
+const UPLOAD_MS = Number(process.env.AIPROXY_UPLOAD_MS) || 60000;
+
+/** Attaches image files to the prompt being composed and waits for the upload to finish. */
+async function attach(files) {
+  const input = page.locator(SEL.file);
+  if (await input.count()) {
+    await input.first().setInputFiles(files);
+  } else {
+    const [chooser] = await Promise.all([
+      page.waitForEvent('filechooser', { timeout: 5000 }).catch(() => null),
+      page.locator(SEL.attach).first().click({ timeout: 5000 }),
+    ]);
+    if (!chooser) throw new Error('image upload: no file input or attach button found on the page');
+    await chooser.setFiles(files);
+  }
+  await sleep(1000);
+  const until = Date.now() + UPLOAD_MS;
+  while (Date.now() < until && (await page.locator(SEL.uploading).count()) > 0) await sleep(300);
+  if ((await page.locator(SEL.uploading).count()) > 0) throw new Error(`image upload did not finish within ${UPLOAD_MS / 1000} s`);
+  log('info', `${files.length} image(s) attached`);
+}
+
+async function chat(id, prompt, files, timeoutMs) {
   await ensureSession();
   const deadline = Date.now() + timeoutMs;
   for (let attempt = 1; ; attempt++) {
-    const result = await attempt_(id, prompt, deadline);
+    const result = await attempt_(id, prompt, files, deadline);
     if (result !== 'stalled') return;
     if (attempt >= 3 || Date.now() > deadline - STALL_MS) throw new Error(`no answer from the page (${attempt} attempts)`);
     log('warn', `no answer started after ${STALL_MS / 1000} s, sending again in a new conversation (attempt ${attempt + 1})`);
   }
 }
 
-async function attempt_(id, prompt, deadline) {
+async function attempt_(id, prompt, files, deadline) {
   await goHome(); // a fresh conversation per request
   const input = page.locator(SEL.input).first();
   await input.waitFor({ state: 'visible', timeout: 30000 });
   const messages = page.locator(SEL.message);
   const before = await messages.count();
+  if (files.length) await attach(files);
   await input.fill(prompt);
   // Enter right after navigating to a new chat can be lost (handlers not attached yet):
   // make sure the prompt left the input, else press again, then try the send button.
@@ -312,7 +340,7 @@ async function attempt_(id, prompt, deadline) {
 async function handle(req) {
   try {
     if (req.op === 'chat') {
-      await chat(req.id, String(req.prompt ?? ''), Number(req.timeout_ms) || 300000);
+      await chat(req.id, String(req.prompt ?? ''), Array.isArray(req.files) ? req.files.map(String) : [], Number(req.timeout_ms) || 300000);
       out({ id: req.id, type: 'done' });
     } else if (req.op === 'login') {
       await ensureSession(true);

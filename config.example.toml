@@ -69,6 +69,7 @@ runtime = "native"           # wsl needs WSLg for the visible login browser
 command = "node"
 timeout_secs = 300
 max_prompt_chars = 400000     # longer prompts get a 400 from the proxy (0 = no limit); the CLIs have none
+images = true                # false = a 400 for messages with images (CLIs read them as files, DeepSeek uploads them)
 url = "https://chat.deepseek.com"
 browser = "chromium"         # chromium | chrome | msedge
 # profile_dir = ""           # cookies; default <home>/deepseek-profile (wsl: <sidecar_dir>/profile)

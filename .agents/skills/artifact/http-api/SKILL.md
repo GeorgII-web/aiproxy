@@ -39,10 +39,14 @@ Layers (outer to inner): permissive CORS, `log_request` (`method path status ms`
 
 ## Limits (checked in `start()` before the provider is called)
 
-- `Content::unsupported()` → any non-text part (`image_url`, `input_image`, …) → 400 `unsupported_content`.
+- `Content::unsupported()` → any part that is not text or an image (audio, files) → 400 `unsupported_content`.
+- Images (`image_url` / `input_image`, base64 `data:` URLs only, `openai::Image::from_data_url`): `build_input`
+  decodes them into `ChatInput.images` and puts `[image N]` markers into the turn text; an undecodable one or
+  `ProviderConfig.images = false` → 400 `unsupported_content`. Providers write them to temp files (see
+  `../cli-providers/SKILL.md`, `../deepseek-sidecar/SKILL.md`).
 - `ProviderConfig.max_prompt_chars` (0 = off; DeepSeek default 400 000) against system + prompt characters → 400
   `context_length_exceeded` with the count and the limit in the message; `prompt too long` warn in the log.
-- `/api/status` reports `max_prompt_chars` per provider; the settings page shows it under the kind.
+- `/api/status` reports `max_prompt_chars` and `images` per provider; the settings page shows them under the kind.
 
 ## Tool emulation (`src/tools.rs`)
 

@@ -18,6 +18,10 @@ description: How `src/providers/cli.rs` runs Claude Code (`claude -p --output-fo
   WSL they go to temp files and a `/bin/bash -c "exec prog args.. '--task='\"$(cat f)\""` wrapper (Windows caps a
   command line at 32767 chars, goose prompts exceed it); natively on Windows a too-long line is refused with a
   clear error before spawning. Temp files are removed when the `TempFiles` guard of the launch drops.
+- Images (`ChatInput.images`): `build()` writes each to a temp file (`Launch::temp_file`, runtime path) and
+  appends a `# Attached images` block to the system prompt mapping `[image N]` to the file; the CLI reads the
+  file itself. Claude additionally gets `--add-dir <temp dir>` so its Read tool may open it without a prompt.
+  Verified: claude/haiku and junie/gemini-flash both read a PNG with text (chat and Responses endpoints).
 - `extra_args` of the provider come first, then the agent's. Claude permissions: default mode, tools needing
   approval are denied; `["--dangerously-skip-permissions"]` or `["--permission-mode", "plan"]` via `extra_args`.
   A Claude Code custom agent: agent `extra_args = ["--agent", "<name>"]`.
