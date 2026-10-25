@@ -32,9 +32,11 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/v1/models", get(v1::models))
         .route("/v1/models/{*id}", get(v1::model))
         .route("/v1/chat/completions", post(v1::chat))
+        .route("/v1/responses", post(v1::responses))
         // Clients configured with the base URL without `/v1`.
         .route("/models", get(v1::models))
         .route("/chat/completions", post(v1::chat))
+        .route("/responses", post(v1::responses))
         .fallback(not_found)
         .layer(middleware::from_fn_with_state(state.clone(), auth))
         .layer(middleware::from_fn(log_request))
@@ -51,7 +53,7 @@ async fn not_found(req: Request) -> Response {
     error(
         StatusCode::NOT_FOUND,
         format!(
-            "no route for {} {}; the chat endpoint is POST /v1/chat/completions and models are GET /v1/models (base URL without a trailing /v1 in most clients)",
+            "no route for {} {}; chat is POST /v1/chat/completions or POST /v1/responses, models are GET /v1/models (base URL without a trailing /v1 in most clients)",
             req.method(),
             req.uri().path()
         ),

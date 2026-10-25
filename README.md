@@ -114,6 +114,7 @@ machine. Junie always works inside `workdir` and may edit files there.
 | `GET /v1/models` | all models of all enabled providers |
 | `GET /v1/models/{id}` | one model |
 | `POST /v1/chat/completions` | chat; `"stream": true` for SSE |
+| `POST /v1/responses` | the Responses API: `input` string or items, `instructions`; `"stream": true` for SSE events; tools are not supported |
 | `GET /health` | `ok` |
 | `GET /api/status`, `GET/PUT /api/settings`, `GET /api/logs?lines=N`, `POST /api/providers/{id}/login` | settings page backend |
 

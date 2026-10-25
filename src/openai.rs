@@ -44,7 +44,7 @@ impl Content {
             Content::Text(t) => t.clone(),
             Content::Parts(parts) => parts
                 .iter()
-                .filter(|p| p.kind == "text")
+                .filter(|p| matches!(p.kind.as_str(), "text" | "input_text" | "output_text"))
                 .map(|p| p.text.as_str())
                 .collect::<Vec<_>>()
                 .join("\n"),
@@ -92,6 +92,90 @@ pub fn build_input(messages: &[Message]) -> ChatInput {
     }
 }
 
+/// `POST /v1/responses` (OpenAI Responses API): `input` is a string or a list of items.
+#[derive(Debug, Deserialize)]
+pub struct ResponsesRequest {
+    pub model: String,
+    #[serde(default)]
+    pub input: ResponsesInput,
+    #[serde(default)]
+    pub instructions: Option<String>,
+    #[serde(default)]
+    pub stream: bool,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(untagged)]
+pub enum ResponsesInput {
+    Text(String),
+    Items(Vec<InputItem>),
+    #[default]
+    Empty,
+}
+
+/// A message (`role` + `content`), a `function_call` or a `function_call_output`; other items are ignored.
+#[derive(Debug, Deserialize)]
+pub struct InputItem {
+    #[serde(rename = "type", default)]
+    pub kind: Option<String>,
+    #[serde(default)]
+    pub role: Option<String>,
+    #[serde(default)]
+    pub content: Content,
+    #[serde(default)]
+    pub name: Option<String>,
+    #[serde(default)]
+    pub arguments: Option<String>,
+    #[serde(default)]
+    pub output: Option<String>,
+}
+
+impl ResponsesRequest {
+    /// The same flattening as chat completions: `instructions` is the first system message.
+    pub fn messages(&self) -> Vec<Message> {
+        let mut messages = Vec::new();
+        if let Some(i) = &self.instructions {
+            messages.push(Message {
+                role: "system".into(),
+                content: Content::Text(i.clone()),
+            });
+        }
+        match &self.input {
+            ResponsesInput::Text(t) => messages.push(Message {
+                role: "user".into(),
+                content: Content::Text(t.clone()),
+            }),
+            ResponsesInput::Items(items) => {
+                for it in items {
+                    let (role, text) = match it.kind.as_deref() {
+                        Some("function_call") => (
+                            "assistant",
+                            format!(
+                                "[tool call] {}({})",
+                                it.name.as_deref().unwrap_or("?"),
+                                it.arguments.as_deref().unwrap_or("")
+                            ),
+                        ),
+                        Some("function_call_output") => {
+                            ("tool", it.output.clone().unwrap_or_default())
+                        }
+                        None | Some("message") => {
+                            (it.role.as_deref().unwrap_or("user"), it.content.text())
+                        }
+                        _ => continue,
+                    };
+                    messages.push(Message {
+                        role: role.into(),
+                        content: Content::Text(text),
+                    });
+                }
+            }
+            ResponsesInput::Empty => {}
+        }
+        messages
+    }
+}
+
 pub fn now() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -100,7 +184,11 @@ pub fn now() -> u64 {
 }
 
 pub fn new_id() -> String {
-    format!("chatcmpl-{}", uuid::Uuid::new_v4().simple())
+    id("chatcmpl")
+}
+
+pub fn id(prefix: &str) -> String {
+    format!("{prefix}_{}", uuid::Uuid::new_v4().simple())
 }
 
 /// Rough token estimate; the agents do not report usage.

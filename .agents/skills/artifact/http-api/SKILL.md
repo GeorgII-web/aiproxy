@@ -1,6 +1,6 @@
 ---
 name: http-api
-description: The axum HTTP layer in `src/server` — OpenAI endpoints `/v1/models`, `/v1/models/{*id}`, `/v1/chat/completions` with SSE streaming, the first-delta wait that turns provider failures into 502, the error envelope, Bearer auth, request log line, and the settings backend `/api/status`, `/api/settings`, `/api/logs`, `/api/providers/{id}/login`. Use when changing or debugging an endpoint, response shape, auth, or the settings page backend.
+description: The axum HTTP layer in `src/server` — OpenAI endpoints `/v1/models`, `/v1/models/{*id}`, `/v1/chat/completions` and `/v1/responses` with SSE streaming, the first-delta wait that turns provider failures into 502, the error envelope, Bearer auth, request log line, and the settings backend `/api/status`, `/api/settings`, `/api/logs`, `/api/providers/{id}/login`. Use when changing or debugging an endpoint, response shape, auth, or the settings page backend.
 ---
 
 # HTTP API
@@ -17,6 +17,7 @@ types in `src/openai.rs`.
 | `GET /v1/models` | `v1::models` | all `Registry::models()` |
 | `GET /v1/models/{*id}` | `v1::model` | wildcard because ids contain `/` |
 | `POST /v1/chat/completions` | `v1::chat` | `stream: true` → SSE |
+| `POST /v1/responses` | `v1::responses` | Responses API (goose uses it for some models): `ResponsesRequest::messages()` turns `instructions` + `input` (string, `message`, `function_call`, `function_call_output` items) into chat messages; non-stream → one `response` object with one `output_text` message; stream → named SSE events `response.created` … `response.output_text.delta` … `response.completed`, `error` + `response.failed` on a provider error. No tools. |
 | `GET /api/status` | `api::status` | version, base_url, paths, autostart, providers with models |
 | `GET/PUT /api/settings` | `api::get_settings` / `put_settings` | `SettingsView` = server, app, logging + `providers_toml` string |
 | `GET /api/logs?lines=N` | `api::logs` | tail of the newest log file, 1..5000 lines |
