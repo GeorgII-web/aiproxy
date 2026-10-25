@@ -1,0 +1,33 @@
+[package]
+name = "aiproxy"
+version = "0.1.0"
+edition = "2021"
+description = "Tray app: one OpenAI-compatible API in front of local AI agents (Claude CLI, Junie CLI, DeepSeek web)"
+
+[dependencies]
+anyhow = "1"
+async-stream = "0.3"
+auto-launch = "0.5"
+axum = { version = "0.8", features = ["json"] }
+directories = "6"
+futures = "0.3"
+open = "5"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["full"] }
+tokio-stream = "0.1"
+toml = "0.9"
+tower-http = { version = "0.6", features = ["cors"] }
+tracing = "0.1"
+tracing-appender = "0.2"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+uuid = { version = "1", features = ["v4"] }
+
+[target.'cfg(windows)'.dependencies]
+tao = "0.34"
+tray-icon = "0.21"
+
+[profile.release]
+codegen-units = 1
+lto = true
+strip = true

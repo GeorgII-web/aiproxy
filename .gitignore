@@ -1,0 +1,5 @@
+/target
+/sidecar/node_modules
+/sidecar/package-lock.json
+/sidecar/profile
+/.idea

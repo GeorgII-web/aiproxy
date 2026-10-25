@@ -1,0 +1,131 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AIProxy settings</title>
+<style>
+  :root { --bg:#f6f7f9; --fg:#1f2328; --muted:#6b7280; --card:#fff; --line:#e5e7eb; --accent:#2563eb; --bad:#b91c1c; --ok:#15803d; }
+  @media (prefers-color-scheme: dark) { :root { --bg:#111418; --fg:#e6e8eb; --muted:#9aa3ad; --card:#1a1f26; --line:#2b323b; } }
+  * { box-sizing:border-box }
+  body { margin:0; padding:16px; background:var(--bg); color:var(--fg); font:14px/1.45 system-ui, sans-serif; }
+  main { max-width:960px; margin:0 auto; display:grid; gap:16px; }
+  h1 { font-size:20px; margin:0 } h2 { font-size:15px; margin:0 0 10px }
+  section { background:var(--card); border:1px solid var(--line); border-radius:8px; padding:16px; }
+  .grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(200px,1fr)); gap:12px; }
+  label { display:grid; gap:4px; color:var(--muted); font-size:12px }
+  input, select, textarea { width:100%; padding:7px 9px; border:1px solid var(--line); border-radius:6px; background:var(--bg); color:var(--fg); font:inherit; }
+  textarea { font:12px/1.4 ui-monospace, monospace; min-height:260px; white-space:pre; }
+  pre { margin:0; font:12px/1.4 ui-monospace, monospace; white-space:pre-wrap; max-height:360px; overflow:auto; background:var(--bg); padding:10px; border-radius:6px; }
+  button { padding:8px 14px; border:0; border-radius:6px; background:var(--accent); color:#fff; font:inherit; cursor:pointer; }
+  button.secondary { background:transparent; color:var(--accent); border:1px solid var(--accent); }
+  .row { display:flex; gap:8px; align-items:center; flex-wrap:wrap }
+  .check { flex-direction:row; align-items:center; color:var(--fg); font-size:14px } .check input { width:auto }
+  code { font:12px ui-monospace, monospace; background:var(--bg); padding:1px 5px; border-radius:4px }
+  table { width:100%; border-collapse:collapse } td, th { text-align:left; padding:6px 8px; border-bottom:1px solid var(--line); vertical-align:top }
+  #msg { min-height:20px } .bad { color:var(--bad) } .ok { color:var(--ok) }
+</style>
+</head>
+<body>
+<main>
+  <div class="row" style="justify-content:space-between">
+    <h1>AIProxy</h1>
+    <span id="base" class="row"></span>
+  </div>
+
+  <section>
+    <h2>Status</h2>
+    <table id="providers"><thead><tr><th>Provider</th><th>Kind</th><th>Command</th><th>Models</th><th></th></tr></thead><tbody></tbody></table>
+    <p style="color:var(--muted);margin:10px 0 0">DeepSeek logs in by itself: the first request without a session opens a browser window. <b>Log in / re-login</b> opens it on demand (new account, expired session).</p>
+    <p style="color:var(--muted);margin:10px 0 0">Config: <code id="cfgpath"></code> · Logs: <code id="logpath"></code></p>
+  </section>
+
+  <section>
+    <h2>Server</h2>
+    <div class="grid">
+      <label>Host <input id="host"></label>
+      <label>Port <input id="port" type="number" min="1" max="65535"></label>
+      <label>API key (empty = none) <input id="api_key"></label>
+      <label>Log level <select id="level"><option>trace</option><option>debug</option><option>info</option><option>warn</option><option>error</option></select></label>
+      <label>Log files to keep <input id="keep_files" type="number" min="1"></label>
+      <label class="check"><input id="autostart" type="checkbox"> Start with Windows</label>
+    </div>
+  </section>
+
+  <section>
+    <h2>Providers</h2>
+    <p style="color:var(--muted);margin:0 0 8px">TOML, one <code>[[providers]]</code> per provider, each agent a <code>[[providers.agents]]</code>. Model id = <code>id/agent name</code>. Kinds: <code>claude-cli</code>, <code>junie-cli</code>, <code>deepseek-web</code>.</p>
+    <textarea id="providers_toml" spellcheck="false"></textarea>
+  </section>
+
+  <div class="row">
+    <button id="save">Save &amp; apply</button>
+    <span id="msg"></span>
+  </div>
+
+  <section>
+    <div class="row" style="justify-content:space-between"><h2>Log</h2><button id="refresh" class="secondary">Refresh</button></div>
+    <pre id="log"></pre>
+  </section>
+</main>
+<script>
+const $ = (id) => document.getElementById(id);
+let key = localStorage.getItem('aiproxy_key') || '';
+async function api(path, opts = {}) {
+  opts.headers = Object.assign({ 'Content-Type': 'application/json' }, key ? { Authorization: 'Bearer ' + key } : {}, opts.headers || {});
+  let res = await fetch(path, opts);
+  if (res.status === 401) {
+    key = prompt('API key') || '';
+    localStorage.setItem('aiproxy_key', key);
+    opts.headers.Authorization = 'Bearer ' + key;
+    res = await fetch(path, opts);
+  }
+  if (!res.ok) {
+    let text = await res.text();
+    try { text = JSON.parse(text).error.message; } catch {}
+    throw new Error(res.status + ' ' + text);
+  }
+  const ct = res.headers.get('content-type') || '';
+  return ct.includes('json') ? res.json() : res.text();
+}
+function say(text, cls) { $('msg').textContent = text; $('msg').className = cls || ''; }
+async function loadStatus() {
+  const s = await api('/api/status');
+  $('base').innerHTML = `<code>${s.base_url}/v1</code>`;
+  $('cfgpath').textContent = s.config_file; $('logpath').textContent = s.logs_dir;
+  $('providers').querySelector('tbody').innerHTML = s.providers.map(p =>
+    `<tr style="${p.enabled ? '' : 'opacity:.5'}"><td>${p.id}</td><td>${p.kind}</td><td><code>${p.command}</code></td><td>${p.models.map(m => `<code>${m}</code>`).join(' ') || '—'}</td><td>${p.kind === 'deepseek-web' && p.enabled ? `<button class="secondary login" data-id="${p.id}">Log in / re-login</button>` : ''}</td></tr>`).join('');
+  for (const b of document.querySelectorAll('button.login')) b.onclick = () => login(b.dataset.id);
+}
+async function login(id) {
+  say(`${id}: a browser window opens, log in there. Waiting …`);
+  try { await api('/api/providers/' + id + '/login', { method: 'POST' }); say(`${id}: logged in.`, 'ok'); }
+  catch (e) { say(e.message, 'bad'); }
+}
+async function loadSettings() {
+  const s = await api('/api/settings');
+  $('host').value = s.server.host; $('port').value = s.server.port; $('api_key').value = s.server.api_key;
+  $('level').value = s.logging.level; $('keep_files').value = s.logging.keep_files;
+  $('autostart').checked = s.app.autostart; $('providers_toml').value = s.providers_toml;
+}
+async function loadLog() { $('log').textContent = await api('/api/logs?lines=200'); $('log').scrollTop = $('log').scrollHeight; }
+async function reload() { try { await Promise.all([loadStatus(), loadSettings(), loadLog()]); } catch (e) { say(e.message, 'bad'); } }
+$('save').onclick = async () => {
+  const body = {
+    server: { host: $('host').value.trim(), port: Number($('port').value), api_key: $('api_key').value.trim() },
+    app: { autostart: $('autostart').checked },
+    logging: { level: $('level').value, keep_files: Number($('keep_files').value) || 7 },
+    providers_toml: $('providers_toml').value,
+  };
+  try {
+    const r = await api('/api/settings', { method: 'PUT', body: JSON.stringify(body) });
+    if (body.server.api_key !== key) { key = body.server.api_key; localStorage.setItem('aiproxy_key', key); }
+    if (r.restart) { say('Saved. Server restarting on ' + r.base_url + ' …', 'ok'); setTimeout(() => location.href = r.base_url, 1500); }
+    else { say('Saved and applied.', 'ok'); await reload(); }
+  } catch (e) { say(e.message, 'bad'); }
+};
+$('refresh').onclick = () => loadLog().catch(e => say(e.message, 'bad'));
+reload();
+</script>
+</body>
+</html>

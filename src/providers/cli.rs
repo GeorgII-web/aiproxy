@@ -1,0 +1,203 @@
+//! Claude Code and Junie: one process per request, NDJSON on stdout.
+
+use std::time::{Duration, Instant};
+
+use async_stream::try_stream;
+use serde_json::Value;
+
+use super::process::{self, Launch};
+use super::{DeltaStream, ProviderError};
+use crate::config::{AgentConfig, ProviderConfig};
+use crate::openai::ChatInput;
+
+#[derive(Clone, Copy, Debug)]
+pub enum Flavor {
+    /// `claude -p --output-format stream-json --include-partial-messages`, prompt on stdin.
+    Claude,
+    /// `junie --output-format=json-stream --task=<prompt>`.
+    Junie,
+}
+
+pub struct CliProvider {
+    pub cfg: ProviderConfig,
+    pub flavor: Flavor,
+}
+
+impl CliProvider {
+    fn build(&self, agent: &AgentConfig, input: &ChatInput) -> (Launch, Option<String>) {
+        let mut cmd = Launch::new(&self.cfg);
+        let system: Vec<&str> = [agent.system_prompt.as_str(), input.system.as_deref().unwrap_or("")]
+            .into_iter()
+            .filter(|s| !s.trim().is_empty())
+            .collect();
+        let system = (!system.is_empty()).then(|| system.join("\n\n"));
+        match self.flavor {
+            Flavor::Claude => {
+                cmd.args(["-p", "--output-format", "stream-json", "--verbose", "--include-partial-messages"]);
+                if !agent.model.is_empty() {
+                    cmd.args(["--model", &agent.model]);
+                }
+                if let Some(s) = &system {
+                    cmd.args(["--append-system-prompt", s]);
+                }
+                cmd.args(&self.cfg.extra_args).args(&agent.extra_args);
+                (cmd, Some(input.prompt.clone()))
+            }
+            Flavor::Junie => {
+                cmd.args(["--skip-update-check", "--output-format=json-stream"]);
+                if let Some(d) = cmd.cwd.clone() {
+                    cmd.arg(format!("--project={d}"));
+                }
+                if !agent.model.is_empty() {
+                    cmd.arg(format!("--model={}", agent.model));
+                }
+                if let Some(s) = &system {
+                    cmd.arg(format!("--system-prompt={s}"));
+                }
+                cmd.args(&self.cfg.extra_args).args(&agent.extra_args);
+                cmd.arg(format!("--task={}", input.prompt));
+                (cmd, None)
+            }
+        }
+    }
+
+    pub fn chat(&self, agent: &AgentConfig, input: ChatInput) -> DeltaStream {
+        let (launch, stdin) = self.build(agent, &input);
+        let timeout = Duration::from_secs(self.cfg.timeout_secs.max(1));
+        let flavor = self.flavor;
+        let id = self.cfg.id.clone();
+        Box::pin(try_stream! {
+            let cmd = launch.command().await;
+            let mut run = process::spawn(cmd, stdin).await?;
+            tracing::debug!(provider = %id, program = %run.program, "started");
+            let deadline = tokio::time::Instant::from_std(Instant::now() + timeout);
+            let mut parser = Parser { flavor, streamed: false, result: None };
+            let mut yielded = false;
+            loop {
+                let next = tokio::select! {
+                    l = run.lines.next_line() => l.map_err(|e| ProviderError(format!("{id}: {e}"))),
+                    _ = tokio::time::sleep_until(deadline) => {
+                        Err(ProviderError(format!("{id}: no answer within {}s", timeout.as_secs())))
+                    }
+                };
+                let line = next?;
+                let Some(line) = line else { break };
+                match parser.line(&line) {
+                    Event::Delta(text) => {
+                        yielded = true;
+                        yield text;
+                    }
+                    Event::Error(message) => Err(ProviderError(format!("{id}: {message}")))?,
+                    Event::None => {}
+                }
+            }
+            let status = run.child.0.wait().await.map_err(|e| ProviderError(format!("{id}: {e}")))?;
+            if !status.success() && !yielded && parser.result.is_none() {
+                Err(ProviderError(format!("{id}: {} exited with {status}: {}", run.program, run.stderr_tail())))?;
+            }
+            if let Some(text) = parser.result.take() {
+                if !yielded {
+                    yield text;
+                }
+            }
+        })
+    }
+}
+
+enum Event {
+    Delta(String),
+    Error(String),
+    None,
+}
+
+struct Parser {
+    flavor: Flavor,
+    /// Claude sent partial deltas, so the final `result` must not be repeated.
+    streamed: bool,
+    /// Full answer for CLIs (or versions) that only report it at the end.
+    result: Option<String>,
+}
+
+impl Parser {
+    fn line(&mut self, line: &str) -> Event {
+        let line = line.trim();
+        if !line.starts_with('{') {
+            if !line.is_empty() {
+                tracing::debug!(target: "stdout", "{line}");
+            }
+            return Event::None;
+        }
+        let Ok(v) = serde_json::from_str::<Value>(line) else {
+            return Event::None;
+        };
+        match self.flavor {
+            Flavor::Claude => self.claude(&v),
+            Flavor::Junie => self.junie(&v),
+        }
+    }
+
+    fn claude(&mut self, v: &Value) -> Event {
+        match v["type"].as_str().unwrap_or("") {
+            "stream_event" => {
+                let ev = &v["event"];
+                if ev["type"] == "content_block_delta" && ev["delta"]["type"] == "text_delta" {
+                    if let Some(t) = ev["delta"]["text"].as_str() {
+                        self.streamed = true;
+                        return Event::Delta(t.to_string());
+                    }
+                }
+                Event::None
+            }
+            "assistant" if !self.streamed => {
+                if let Some(blocks) = v["message"]["content"].as_array() {
+                    let text: String = blocks
+                        .iter()
+                        .filter(|b| b["type"] == "text")
+                        .filter_map(|b| b["text"].as_str())
+                        .collect();
+                    if !text.is_empty() {
+                        self.result = Some(text);
+                    }
+                }
+                Event::None
+            }
+            "result" => {
+                if v["is_error"].as_bool().unwrap_or(false) {
+                    let msg = v["result"]
+                        .as_str()
+                        .map(str::to_string)
+                        .unwrap_or_else(|| v["errors"].to_string());
+                    return Event::Error(msg);
+                }
+                if !self.streamed {
+                    if let Some(r) = v["result"].as_str() {
+                        self.result = Some(r.to_string());
+                    }
+                }
+                Event::None
+            }
+            _ => Event::None,
+        }
+    }
+
+    fn junie(&mut self, v: &Value) -> Event {
+        match v["type"].as_str().unwrap_or("") {
+            "step" => {
+                if let Some(name) = v["name"].as_str() {
+                    tracing::info!(target: "junie", "step: {name}");
+                }
+                Event::None
+            }
+            "result" => {
+                if let Some(r) = v["result"].as_str() {
+                    self.result = Some(r.to_string());
+                }
+                Event::None
+            }
+            "error" => Event::Error(
+                v["message"].as_str().or(v["error"].as_str()).unwrap_or("junie reported an error").to_string(),
+            ),
+            _ => Event::None,
+        }
+    }
+}

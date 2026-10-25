@@ -1,0 +1,76 @@
+# AIProxy settings. Live file: %APPDATA%\aiproxy\config.toml (Windows), ~/.config/aiproxy/config.toml (else),
+# or $AIPROXY_HOME/config.toml. Edit on the settings page (tray → Open settings) or here, then restart.
+
+[server]
+host = "127.0.0.1"   # keep loopback unless api_key is set
+port = 8787
+api_key = ""         # empty = open; otherwise clients send "Authorization: Bearer <api_key>"
+
+[app]
+autostart = false    # start with Windows
+
+[logging]
+level = "info"       # trace | debug | info | warn | error
+keep_files = 7       # daily files in <home>/logs
+
+# One [[providers]] per provider. Model id = "<id>/<agent name>".
+# Kinds: claude-cli, junie-cli, deepseek-web.
+# runtime = "native" runs the command on Windows; "wsl" runs it inside WSL through wsl.exe
+# (a bare command name is then looked up in the WSL login shell, so nvm/~/.local/bin work).
+
+[[providers]]
+id = "claude"
+kind = "claude-cli"
+enabled = true
+runtime = "wsl"              # native | wsl
+# wsl_distro = "Ubuntu-24.04"  # empty = default distribution
+command = "claude"           # or a full path; on Windows claude.exe/.cmd are found on PATH
+timeout_secs = 600
+# extra_args = ["--dangerously-skip-permissions"]   # let Claude run tools unattended (prompts come over HTTP!)
+# workdir = "C:\\work\\repo"
+
+[[providers.agents]]
+name = "sonnet"
+model = "sonnet"
+
+[[providers.agents]]
+name = "opus"
+model = "opus"
+
+[[providers.agents]]
+name = "reviewer"            # exposed as claude/reviewer
+model = "sonnet"
+system_prompt = "You review code. Answer with findings only."
+extra_args = ["--agent", "reviewer"]   # a Claude Code custom agent
+
+[[providers]]
+id = "junie"
+kind = "junie-cli"
+enabled = true
+runtime = "wsl"
+command = "junie"
+timeout_secs = 900
+workdir = ""                 # the project Junie works in and may modify; empty = aiproxy's cwd
+                             # with runtime = wsl: a Linux path like "/home/me/project"
+
+[[providers.agents]]
+name = "default"             # Junie's configured default model
+
+[[providers.agents]]
+name = "gpt"
+model = "gpt-5.5"            # any id Junie lists for --model
+
+[[providers]]
+id = "deepseek"
+kind = "deepseek-web"
+enabled = true
+runtime = "native"           # wsl needs WSLg for the visible login browser
+command = "node"
+timeout_secs = 300
+url = "https://chat.deepseek.com"
+browser = "chromium"         # chromium | chrome | msedge
+# profile_dir = ""           # cookies; default <home>/deepseek-profile (wsl: <sidecar_dir>/profile)
+# sidecar_dir = ""           # default: sidecar/ next to aiproxy.exe (wsl: Linux path of the sidecar folder)
+
+[[providers.agents]]
+name = "deepseek"
